@@ -2,7 +2,7 @@
   "expo": {
     "name": "Supplementary",
     "slug": "supplementary",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "supplementary",
@@ -33,7 +33,9 @@
         "backgroundColor": "#0e1117"
       },
       "edgeToEdgeEnabled": true,
-      "permissions": [],
+      "permissions": [
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+      ],
       "package": "com.anonymous.supplementary"
     },
     "web": {

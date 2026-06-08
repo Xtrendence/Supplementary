@@ -4,7 +4,7 @@ import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as DocumentPicker from "expo-document-picker";
-import { SafeAreaView, ScrollView, Text, cn } from "@/components/ui";
+import { SafeAreaView, ScrollView, Switch, Text, cn } from "@/components/ui";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -17,12 +17,22 @@ import {
 import {
   CURRENCY_OPTIONS,
   formatCurrency,
+  setAutoUpdate,
   setCurrency,
+  setShowUnscheduled,
   setThemeId,
+  useAutoUpdate,
   useCurrency,
+  useShowUnscheduled,
   useThemeId,
 } from "@/lib/preferences";
 import { hsl, THEMES, type Theme } from "@/lib/themes";
+import {
+  checkForUpdate,
+  currentVersion,
+  downloadAndInstall,
+  type UpdateInfo,
+} from "@/lib/updates";
 import { HistoryCalendar } from "@/components/HistoryCalendar";
 import {
   buildExportPayload,
@@ -38,10 +48,39 @@ export default function Settings() {
   const supplements = useSupplements();
   const currency = useCurrency();
   const activeThemeId = useThemeId();
+  const showUnscheduled = useShowUnscheduled();
+  const autoUpdate = useAutoUpdate();
   const [busy, setBusy] = React.useState<"export" | "import" | null>(null);
   const [debugOpen, setDebugOpen] = React.useState(false);
   const [dataOpen, setDataOpen] = React.useState(false);
   const [themesOpen, setThemesOpen] = React.useState(false);
+  const [update, setUpdate] = React.useState<{
+    status: "idle" | "checking" | "available" | "uptodate" | "downloading" | "error";
+    info?: UpdateInfo;
+    progress?: number;
+    error?: string;
+  }>({ status: "idle" });
+
+  const handleCheckUpdate = async () => {
+    setUpdate({ status: "checking" });
+    try {
+      const info = await checkForUpdate();
+      setUpdate(info ? { status: "available", info } : { status: "uptodate" });
+    } catch (error) {
+      setUpdate({ status: "error", error: String(error) });
+    }
+  };
+
+  const handleInstallUpdate = async (info: UpdateInfo) => {
+    setUpdate({ status: "downloading", info, progress: 0 });
+    try {
+      await downloadAndInstall(info, (fraction) =>
+        setUpdate((prev) => ({ ...prev, progress: fraction }))
+      );
+    } catch (error) {
+      setUpdate({ status: "error", error: String(error) });
+    }
+  };
 
   const activeThemeName =
     THEMES.find((t) => t.id === activeThemeId)?.name ?? "Default";
@@ -247,8 +286,8 @@ export default function Settings() {
         <HistoryCalendar />
 
         <SectionLabel className="mt-6">Preferences</SectionLabel>
-        <View className="rounded-2xl border border-border bg-card p-4">
-          <View className="flex-row items-center justify-between">
+        <View className="overflow-hidden rounded-2xl border border-border bg-card">
+          <View className="flex-row items-center justify-between p-4">
             <View className="flex-1 pr-3">
               <Text className="font-medium">Currency</Text>
               <Text variant="muted" className="text-xs">
@@ -279,6 +318,22 @@ export default function Settings() {
                 );
               })}
             </View>
+          </View>
+
+          <View className="h-px bg-border" />
+
+          <View className="flex-row items-center justify-between p-4">
+            <View className="flex-1 pr-3">
+              <Text className="font-medium">Show unscheduled supplements</Text>
+              <Text variant="muted" className="text-xs leading-5">
+                When off, the Supplements list only shows what&apos;s due today
+                and hides everything not scheduled for today.
+              </Text>
+            </View>
+            <Switch
+              checked={showUnscheduled}
+              onCheckedChange={setShowUnscheduled}
+            />
           </View>
         </View>
 
@@ -382,6 +437,80 @@ export default function Settings() {
                 onPress={handleClearAll}
                 disabled={busy !== null}
               />
+            </View>
+          ) : null}
+        </View>
+
+        <SectionLabel className="mt-8">Updates</SectionLabel>
+        <View className="overflow-hidden rounded-2xl border border-border bg-card">
+          <View className="flex-row items-center justify-between p-4">
+            <View className="flex-1 pr-3">
+              <Text className="font-medium">Automatic updates</Text>
+              <Text variant="muted" className="text-xs leading-5">
+                Check GitHub releases on launch and offer to install new versions.
+              </Text>
+            </View>
+            <Switch checked={autoUpdate} onCheckedChange={setAutoUpdate} />
+          </View>
+
+          <View className="h-px bg-border" />
+
+          <ActionRow
+            icon={<DownloadIcon className="h-5 w-5 text-primary" />}
+            title="Check for updates"
+            subtitle={`Installed v${currentVersion()}`}
+            onPress={handleCheckUpdate}
+            loading={update.status === "checking"}
+            disabled={update.status === "checking" || update.status === "downloading"}
+          />
+
+          {update.status === "uptodate" ? (
+            <Text variant="muted" className="px-4 pb-4 text-xs">
+              You&apos;re on the latest version.
+            </Text>
+          ) : null}
+
+          {update.status === "error" ? (
+            <Text variant="muted" className="px-4 pb-4 text-xs text-destructive">
+              {update.error}
+            </Text>
+          ) : null}
+
+          {update.status === "available" && update.info ? (
+            <View className="px-4 pb-4">
+              <View className="h-px bg-border" />
+              <Text variant="small" className="mt-3 font-semibold text-primary">
+                v{update.info.version} available
+              </Text>
+              {update.info.notes ? (
+                <Text variant="muted" className="mt-1 text-xs leading-5">
+                  {update.info.notes.slice(0, 300)}
+                </Text>
+              ) : null}
+              <Pressable
+                onPress={() => update.info && handleInstallUpdate(update.info)}
+                className="mt-3 flex-row items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 active:opacity-80"
+              >
+                <DownloadIcon className="h-5 w-5 text-primary-foreground" />
+                <Text className="font-semibold text-primary-foreground">
+                  Download & install
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          {update.status === "downloading" ? (
+            <View className="px-4 pb-4">
+              <View className="h-px bg-border" />
+              <Text variant="muted" className="mb-2 mt-3 text-xs">
+                Downloading… {Math.round((update.progress ?? 0) * 100)}%
+              </Text>
+              <View className="h-2 overflow-hidden rounded-full bg-secondary">
+                <View
+                  className="h-full rounded-full bg-primary"
+                  style={{ width: `${Math.round((update.progress ?? 0) * 100)}%` }}
+                />
+              </View>
             </View>
           ) : null}
         </View>

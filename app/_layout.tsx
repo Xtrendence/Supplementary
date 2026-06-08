@@ -14,6 +14,7 @@ import { ThemeProvider as UIThemeProvider } from '@/components/ui/theme';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { useTheme } from '@/lib/preferences';
 import { navColors, themeVars } from '@/lib/themes';
+import { maybePromptUpdate } from '@/lib/updates';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -28,6 +29,10 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [loaded]);
+
+  useEffect(() => {
+    maybePromptUpdate();
+  }, []);
 
   if (!loaded) {
     return null;

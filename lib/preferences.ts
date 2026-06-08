@@ -93,3 +93,77 @@ export function setThemeId(id: string): void {
   storage.set(THEME_KEY, id);
   for (const listener of themeListeners) listener();
 }
+
+const SHOW_UNSCHEDULED_KEY = "showUnscheduled";
+const showUnscheduledListeners = new Set<() => void>();
+let showUnscheduledCache: boolean | null = null;
+
+function readShowUnscheduled(): boolean {
+  const value = storage.getBoolean(SHOW_UNSCHEDULED_KEY);
+  return value === undefined ? true : value;
+}
+
+function getShowUnscheduledSnapshot(): boolean {
+  if (showUnscheduledCache === null) showUnscheduledCache = readShowUnscheduled();
+  return showUnscheduledCache;
+}
+
+function subscribeShowUnscheduled(listener: () => void): () => void {
+  showUnscheduledListeners.add(listener);
+  return () => {
+    showUnscheduledListeners.delete(listener);
+  };
+}
+
+export function useShowUnscheduled(): boolean {
+  return useSyncExternalStore(
+    subscribeShowUnscheduled,
+    getShowUnscheduledSnapshot,
+    getShowUnscheduledSnapshot
+  );
+}
+
+export function setShowUnscheduled(value: boolean): void {
+  showUnscheduledCache = value;
+  storage.set(SHOW_UNSCHEDULED_KEY, value);
+  for (const listener of showUnscheduledListeners) listener();
+}
+
+const AUTO_UPDATE_KEY = "autoUpdate";
+const autoUpdateListeners = new Set<() => void>();
+let autoUpdateCache: boolean | null = null;
+
+function readAutoUpdate(): boolean {
+  const value = storage.getBoolean(AUTO_UPDATE_KEY);
+  return value === undefined ? true : value;
+}
+
+function getAutoUpdateSnapshot(): boolean {
+  if (autoUpdateCache === null) autoUpdateCache = readAutoUpdate();
+  return autoUpdateCache;
+}
+
+function subscribeAutoUpdate(listener: () => void): () => void {
+  autoUpdateListeners.add(listener);
+  return () => {
+    autoUpdateListeners.delete(listener);
+  };
+}
+
+export function useAutoUpdate(): boolean {
+  return useSyncExternalStore(
+    subscribeAutoUpdate,
+    getAutoUpdateSnapshot,
+    getAutoUpdateSnapshot
+  );
+}
+
+export function getAutoUpdate(): boolean {
+  return getAutoUpdateSnapshot();
+}
+
+export function setAutoUpdate(value: boolean): void {
+  autoUpdateCache = value;
+  storage.set(AUTO_UPDATE_KEY, value);
+  for (const listener of autoUpdateListeners) listener();
+}

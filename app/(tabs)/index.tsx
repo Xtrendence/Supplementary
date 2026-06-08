@@ -19,9 +19,11 @@ import {
   updateSupplement,
   useSupplements,
 } from "@/lib/supplements";
+import { useShowUnscheduled } from "@/lib/preferences";
 
 export default function Home() {
   const supplements = useSupplements();
+  const showUnscheduled = useShowUnscheduled();
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Supplement | null>(null);
 
@@ -50,8 +52,13 @@ export default function Home() {
   };
 
   const ordered = React.useMemo(() => {
-    return [...supplements].sort((a, b) => a.name.localeCompare(b.name));
-  }, [supplements]);
+    const visible = showUnscheduled
+      ? supplements
+      : supplements.filter((s) => isScheduledOn(s));
+    return [...visible].sort((a, b) => a.name.localeCompare(b.name));
+  }, [supplements, showUnscheduled]);
+
+  const hiddenCount = supplements.length - ordered.length;
 
   const dueCount = React.useMemo(
     () => supplements.filter((s) => isScheduledOn(s) && !isTakenOn(s)).length,
@@ -96,16 +103,28 @@ export default function Home() {
         contentContainerClassName="px-4 pb-28 pt-1"
       >
         {ordered.length === 0 ? (
-          <EmptyState onAdd={openCreate} />
+          supplements.length === 0 ? (
+            <EmptyState onAdd={openCreate} />
+          ) : (
+            <NothingScheduled hiddenCount={hiddenCount} />
+          )
         ) : (
-          ordered.map((supplement) => (
-            <SupplementCard
-              key={supplement.id}
-              supplement={supplement}
-              onPress={() => openEdit(supplement)}
-              onToggleTaken={() => toggleTaken(supplement.id)}
-            />
-          ))
+          <>
+            {ordered.map((supplement) => (
+              <SupplementCard
+                key={supplement.id}
+                supplement={supplement}
+                onPress={() => openEdit(supplement)}
+                onToggleTaken={() => toggleTaken(supplement.id)}
+              />
+            ))}
+            {!showUnscheduled && hiddenCount > 0 ? (
+              <Text variant="muted" className="mt-2 px-1 text-center text-xs">
+                {hiddenCount} not scheduled today ·{" "}
+                {`hidden ("Show unscheduled supplements" in Settings)`}
+              </Text>
+            ) : null}
+          </>
         )}
       </ScrollView>
 
@@ -142,6 +161,24 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
           Add your first supplement
         </Text>
       </Pressable>
+    </View>
+  );
+}
+
+function NothingScheduled({ hiddenCount }: { hiddenCount: number }) {
+  return (
+    <View className="mt-24 items-center px-8">
+      <View className="h-20 w-20 items-center justify-center rounded-3xl bg-secondary">
+        <PillIcon className="h-10 w-10 text-primary" />
+      </View>
+      <Text variant="h4" className="mt-5 text-center">
+        Nothing scheduled today
+      </Text>
+      <Text variant="muted" className="mt-2 text-center leading-6">
+        You have {hiddenCount} supplement{hiddenCount === 1 ? "" : "s"} that
+        aren&apos;t scheduled for today. Turn on “Show unscheduled supplements”
+        in Settings to see them all.
+      </Text>
     </View>
   );
 }

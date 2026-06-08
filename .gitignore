@@ -39,3 +39,5 @@ yarn-error.*
 
 expo-env.d.ts
 # @end expo-cli sync
+# Local APK build version counter
+scripts/.apk-version
