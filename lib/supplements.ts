@@ -1,7 +1,14 @@
 import { useSyncExternalStore } from "react";
 import { storage } from "./storage";
 
-export type SupplementUnit = "g" | "mg" | "iu" | "pill";
+export type SupplementUnit =
+  | "g"
+  | "mg"
+  | "iu"
+  | "pill"
+  | "bottle"
+  | "scoop"
+  | "product";
 
 export interface TakenEntry {
   date: string;
@@ -26,10 +33,15 @@ export const UNIT_OPTIONS: { value: SupplementUnit; label: string }[] = [
   { value: "mg", label: "mg" },
   { value: "iu", label: "IU" },
   { value: "pill", label: "Pills" },
+  { value: "bottle", label: "Bottles" },
+  { value: "scoop", label: "Scoops" },
+  { value: "product", label: "Product" },
 ];
 
 export function formatAmount(amount: number, unit: SupplementUnit): string {
   const rounded = Math.round(amount * 100) / 100;
+  const countable = (singular: string, plural: string) =>
+    `${rounded} ${rounded === 1 ? singular : plural}`;
   switch (unit) {
     case "g":
       return `${rounded} g`;
@@ -38,7 +50,13 @@ export function formatAmount(amount: number, unit: SupplementUnit): string {
     case "iu":
       return `${rounded} IU`;
     case "pill":
-      return `${rounded} ${rounded === 1 ? "pill" : "pills"}`;
+      return countable("pill", "pills");
+    case "bottle":
+      return countable("bottle", "bottles");
+    case "scoop":
+      return countable("scoop", "scoops");
+    case "product":
+      return countable("product", "products");
   }
 }
 
