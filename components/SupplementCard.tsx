@@ -5,6 +5,7 @@ import { CheckIcon } from "@/components/ui/lib/icons";
 import { formatCurrency, useCurrency } from "@/lib/preferences";
 import {
   costPerDose,
+  dateKey,
   dosesLeft,
   formatAmount,
   isScheduledOn,
@@ -15,6 +16,8 @@ import {
 
 interface SupplementCardProps {
   supplement: Supplement;
+  /** The day this card is being viewed/edited for. */
+  date: Date;
   onPress: () => void;
   onToggleTaken: () => void;
 }
@@ -33,11 +36,14 @@ function formatSupply(calendarDays: number | null): string {
 
 export function SupplementCard({
   supplement,
+  date,
   onPress,
   onToggleTaken,
 }: SupplementCardProps) {
-  const scheduledToday = isScheduledOn(supplement);
-  const takenToday = isTakenOn(supplement);
+  const scheduledToday = isScheduledOn(supplement, date);
+  const takenToday = isTakenOn(supplement, date);
+  const isToday = dateKey(date) === dateKey();
+  const daySuffix = isToday ? " today" : "";
   const doses = dosesLeft(supplement);
   const projection = projectSupply(supplement);
   const cost = costPerDose(supplement);
@@ -70,15 +76,17 @@ export function SupplementCard({
           <View className="mt-1 flex-row items-center gap-1.5">
             {takenToday ? (
               <Text variant="small" className="text-primary">
-                Taken today · {formatAmount(supplement.servingSize, supplement.unit)}
+                Taken{daySuffix} ·{" "}
+                {formatAmount(supplement.servingSize, supplement.unit)}
               </Text>
             ) : scheduledToday ? (
               <Text variant="small" className="text-foreground">
-                Take {formatAmount(supplement.servingSize, supplement.unit)} today
+                Take {formatAmount(supplement.servingSize, supplement.unit)}
+                {daySuffix}
               </Text>
             ) : (
               <Text variant="small" className="text-muted-foreground">
-                Not scheduled today
+                Not scheduled{daySuffix}
               </Text>
             )}
           </View>
