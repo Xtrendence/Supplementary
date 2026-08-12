@@ -673,9 +673,19 @@ function mergeSets(
 	exercisesAdded: number,
 ): WorkoutImportResult {
 	const byMonth = new Map<string, WorkoutSet[]>();
-	const seen = new Set<string>();
+
+	// Matching is by count rather than by presence. Identical sets are normal —
+	// three sets of 20 reps at 8 kg in one session is a real workout, and a CSV
+	// with no time column gives every row that day the same timestamp, so they
+	// all share a signature. Only as many incoming sets as are already stored
+	// are skipped; the rest are added, which keeps a repeated import idempotent
+	// without ever dropping a genuine set.
+	const alreadyStored = new Map<string, number>();
 	for (const month of getMonths()) {
-		for (const set of getMonthSets(month)) seen.add(signature(set));
+		for (const set of getMonthSets(month)) {
+			const sig = signature(set);
+			alreadyStored.set(sig, (alreadyStored.get(sig) ?? 0) + 1);
+		}
 	}
 
 	let added = 0;
@@ -683,11 +693,12 @@ function mergeSets(
 
 	for (const item of pending) {
 		const sig = signature(item);
-		if (seen.has(sig)) {
+		const unmatched = alreadyStored.get(sig) ?? 0;
+		if (unmatched > 0) {
+			alreadyStored.set(sig, unmatched - 1);
 			skipped += 1;
 			continue;
 		}
-		seen.add(sig);
 
 		const date = dateKey(new Date(item.at));
 		const month = monthKeyOfDate(date);

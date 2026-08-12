@@ -165,7 +165,7 @@ export function WorkoutSettings() {
 
       const details = [
         `${outcome.added} set${outcome.added === 1 ? "" : "s"} added`,
-        outcome.skipped > 0 ? `${outcome.skipped} duplicate skipped` : null,
+        outcome.skipped > 0 ? `${outcome.skipped} already recorded` : null,
         outcome.exercisesAdded > 0
           ? `${outcome.exercisesAdded} new exercise${outcome.exercisesAdded === 1 ? "" : "s"}`
           : null,

@@ -150,7 +150,9 @@ Use the in-app Settings screen, under the relevant section:
 
 - Supplements export creates a JSON backup; importing replaces current local data
 - Workout export takes a date range and writes JSON or CSV
-- Workout import accepts JSON or CSV and merges, skipping sets already recorded
+- Workout import accepts JSON or CSV and merges, skipping sets already recorded.
+  Matching is by count, so repeated identical sets in one session are all kept and
+  re-importing the same file still changes nothing
 - CSV columns are matched by name, so both the app's own export
   (`date,time,exercise,reps,weight,unit,note`) and files shaped like
   `Date, Exercise, Weight (kg), Reps, Type` import correctly. Unknown columns are
