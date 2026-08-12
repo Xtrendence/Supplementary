@@ -38,10 +38,14 @@ module.exports = {
           foreground: "hsl(var(--card-foreground))",
         },
       },
+      // Nothing in the app should read as a hard rectangle, so the small end of
+      // the scale is bumped up. Fixed values rather than calc(var(--radius))
+      // so inputs and buttons round predictably.
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        DEFAULT: "9px",
+        sm: "10px",
+        md: "14px",
+        lg: "18px",
       },
     },
   },

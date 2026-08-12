@@ -1,6 +1,16 @@
 import { useSyncExternalStore } from "react";
 import { storage } from "./storage";
 import { DEFAULT_THEME_ID, getThemeById, THEMES, type Theme } from "./themes";
+import type { WeightUnit } from "./workouts";
+
+/** The app is split into two independent trackers. Almost every preference
+ *  (theme, data, calendar, backups) is scoped to one of them. */
+export type AppSection = "supplements" | "workout";
+
+export const SECTION_OPTIONS: { value: AppSection; label: string }[] = [
+  { value: "supplements", label: "Supplements" },
+  { value: "workout", label: "Workout" },
+];
 
 export type Currency = "GBP" | "USD";
 
@@ -59,18 +69,101 @@ export function formatCurrency(
   return `${SYMBOLS[currency]}${amount.toFixed(2)}`;
 }
 
-const THEME_KEY = "themeId";
-const themeListeners = new Set<() => void>();
-let themeCache: string | null = null;
+const DEFAULT_SECTION_KEY = "defaultSection";
+const defaultSectionListeners = new Set<() => void>();
+let defaultSectionCache: AppSection | null = null;
 
-function readThemeId(): string {
-  const value = storage.getString(THEME_KEY);
+function readDefaultSection(): AppSection {
+  return storage.getString(DEFAULT_SECTION_KEY) === "workout"
+    ? "workout"
+    : "supplements";
+}
+
+function getDefaultSectionSnapshot(): AppSection {
+  if (defaultSectionCache === null) defaultSectionCache = readDefaultSection();
+  return defaultSectionCache;
+}
+
+function subscribeDefaultSection(listener: () => void): () => void {
+  defaultSectionListeners.add(listener);
+  return () => {
+    defaultSectionListeners.delete(listener);
+  };
+}
+
+/** Which tab the app lands on at launch. Shared across both sections. */
+export function useDefaultSection(): AppSection {
+  return useSyncExternalStore(
+    subscribeDefaultSection,
+    getDefaultSectionSnapshot,
+    getDefaultSectionSnapshot
+  );
+}
+
+export function getDefaultSection(): AppSection {
+  return getDefaultSectionSnapshot();
+}
+
+export function setDefaultSection(section: AppSection): void {
+  defaultSectionCache = section;
+  storage.set(DEFAULT_SECTION_KEY, section);
+  for (const listener of defaultSectionListeners) listener();
+}
+
+const sectionListeners = new Set<() => void>();
+let activeSection: AppSection | null = null;
+
+function getActiveSectionSnapshot(): AppSection {
+  if (activeSection === null) activeSection = getDefaultSection();
+  return activeSection;
+}
+
+function subscribeSection(listener: () => void): () => void {
+  sectionListeners.add(listener);
+  return () => {
+    sectionListeners.delete(listener);
+  };
+}
+
+/** The section currently being viewed. Not persisted — it follows the tab bar
+ *  (and the switcher in Settings) and starts on the default section. */
+export function useActiveSection(): AppSection {
+  return useSyncExternalStore(
+    subscribeSection,
+    getActiveSectionSnapshot,
+    getActiveSectionSnapshot
+  );
+}
+
+export function getActiveSection(): AppSection {
+  return getActiveSectionSnapshot();
+}
+
+export function setActiveSection(section: AppSection): void {
+  if (getActiveSectionSnapshot() === section) return;
+  activeSection = section;
+  for (const listener of sectionListeners) listener();
+}
+
+const THEME_KEYS: Record<AppSection, string> = {
+  supplements: "themeId",
+  workout: "themeId:workout",
+};
+
+const themeListeners = new Set<() => void>();
+const themeCache: Partial<Record<AppSection, string>> = {};
+
+function readThemeId(section: AppSection): string {
+  const value = storage.getString(THEME_KEYS[section]);
   return value && THEMES.some((t) => t.id === value) ? value : DEFAULT_THEME_ID;
 }
 
-function getThemeIdSnapshot(): string {
-  if (themeCache === null) themeCache = readThemeId();
-  return themeCache;
+function getThemeIdFor(section: AppSection): string {
+  const cached = themeCache[section];
+  if (cached !== undefined) return cached;
+  const value = readThemeId(section);
+  themeCache[section] = value;
+  return value;
 }
 
 function subscribeTheme(listener: () => void): () => void {
@@ -80,17 +173,30 @@ function subscribeTheme(listener: () => void): () => void {
   };
 }
 
+/** Both sections pick from the same theme list, but each remembers its own. */
+export function useSectionThemeId(section: AppSection): string {
+  return useSyncExternalStore(
+    subscribeTheme,
+    () => getThemeIdFor(section),
+    () => getThemeIdFor(section)
+  );
+}
+
 export function useThemeId(): string {
-  return useSyncExternalStore(subscribeTheme, getThemeIdSnapshot, getThemeIdSnapshot);
+  return useSectionThemeId(useActiveSection());
 }
 
 export function useTheme(): Theme {
   return getThemeById(useThemeId());
 }
 
-export function setThemeId(id: string): void {
-  themeCache = id;
-  storage.set(THEME_KEY, id);
+export function useSectionTheme(section: AppSection): Theme {
+  return getThemeById(useSectionThemeId(section));
+}
+
+export function setThemeId(section: AppSection, id: string): void {
+  themeCache[section] = id;
+  storage.set(THEME_KEYS[section], id);
   for (const listener of themeListeners) listener();
 }
 
@@ -127,6 +233,45 @@ export function setShowUnscheduled(value: boolean): void {
   showUnscheduledCache = value;
   storage.set(SHOW_UNSCHEDULED_KEY, value);
   for (const listener of showUnscheduledListeners) listener();
+}
+
+const WEIGHT_UNIT_KEY = "weightUnit";
+const weightUnitListeners = new Set<() => void>();
+let weightUnitCache: WeightUnit | null = null;
+
+function readWeightUnit(): WeightUnit {
+  return storage.getString(WEIGHT_UNIT_KEY) === "lbs" ? "lbs" : "kg";
+}
+
+function getWeightUnitSnapshot(): WeightUnit {
+  if (weightUnitCache === null) weightUnitCache = readWeightUnit();
+  return weightUnitCache;
+}
+
+function subscribeWeightUnit(listener: () => void): () => void {
+  weightUnitListeners.add(listener);
+  return () => {
+    weightUnitListeners.delete(listener);
+  };
+}
+
+/** Display unit only — recorded sets keep the unit they were entered in. */
+export function useWeightUnit(): WeightUnit {
+  return useSyncExternalStore(
+    subscribeWeightUnit,
+    getWeightUnitSnapshot,
+    getWeightUnitSnapshot
+  );
+}
+
+export function getWeightUnit(): WeightUnit {
+  return getWeightUnitSnapshot();
+}
+
+export function setWeightUnit(unit: WeightUnit): void {
+  weightUnitCache = unit;
+  storage.set(WEIGHT_UNIT_KEY, unit);
+  for (const listener of weightUnitListeners) listener();
 }
 
 const AUTO_UPDATE_KEY = "autoUpdate";

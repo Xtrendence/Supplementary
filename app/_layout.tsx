@@ -55,6 +55,10 @@ export default function RootLayout() {
               <ThemeProvider value={navTheme}>
                 <Stack>
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen
+                    name="exercise/[id]"
+                    options={{ headerShown: false }}
+                  />
                   <Stack.Screen name="+not-found" />
                 </Stack>
                 <StatusBar style={theme.dark ? 'light' : 'dark'} />

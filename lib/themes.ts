@@ -355,6 +355,22 @@ export function hsl(triplet: string): string {
   return `hsl(${h}, ${s}, ${l})`;
 }
 
+/** Rotates a palette colour around the wheel so it stays in keeping with the
+ *  theme while reading as a clearly different colour. */
+export function hslShifted(triplet: string, degrees: number): string {
+  const [h, s, l] = triplet.trim().split(/\s+/);
+  const hue = (Number.parseFloat(h) + degrees + 360) % 360;
+  return `hsl(${hue}, ${s}, ${l})`;
+}
+
+/** Fixed markers for personal bests, so they mean the same thing whichever
+ *  theme is active. */
+export const PB_COLORS = {
+  weight: "#f59e0b",
+  reps: "#38bdf8",
+  both: "#a855f7",
+} as const;
+
 export function themeVars(theme: Theme) {
   const p = theme.palette;
   return vars({

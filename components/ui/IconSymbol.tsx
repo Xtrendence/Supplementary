@@ -18,6 +18,7 @@ const MAPPING = {
   wrench: "settings",
   "checkmark.shield.fill": "verified-user",
   "pills.fill": "medication",
+  "dumbbell.fill": "fitness-center",
   gearshape: "settings",
 } as IconMapping;
 

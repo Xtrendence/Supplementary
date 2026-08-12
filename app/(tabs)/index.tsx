@@ -8,9 +8,14 @@ import {
   PlusIcon,
   XIcon,
 } from "@/components/ui/lib/icons";
+import { useFocusEffect } from "expo-router";
 import { SupplementCard } from "@/components/SupplementCard";
 import { SupplementForm } from "@/components/SupplementForm";
-import { useShowUnscheduled, useTheme } from "@/lib/preferences";
+import {
+  setActiveSection,
+  useShowUnscheduled,
+  useTheme,
+} from "@/lib/preferences";
 import { themeVars } from "@/lib/themes";
 import {
   addSupplement,
@@ -37,6 +42,13 @@ function shiftKey(key: string, deltaDays: number): string {
 export default function Home() {
   const supplements = useSupplements();
   const showUnscheduled = useShowUnscheduled();
+
+  // Each section owns its own theme, so viewing this tab makes it the active
+  // one.
+  useFocusEffect(
+    React.useCallback(() => setActiveSection("supplements"), [])
+  );
+
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Supplement | null>(null);
   const [jumpOpen, setJumpOpen] = React.useState(false);
