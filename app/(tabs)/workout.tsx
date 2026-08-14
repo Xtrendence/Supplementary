@@ -10,6 +10,7 @@ import {
   TimerIcon,
 } from "@/components/ui/lib/icons";
 import { ExerciseSheet } from "@/components/ExerciseSheet";
+import { useSecondTick } from "@/hooks/useSecondTick";
 import { setActiveSection, useWeightUnit } from "@/lib/preferences";
 import {
   type Exercise,
@@ -26,16 +27,6 @@ import {
   type WorkoutSet,
 } from "@/lib/workouts";
 
-/** Re-renders once a second so the "time since" counters stay live. */
-function useSecondTick(enabled: boolean): void {
-  const [, tick] = React.useReducer((n: number) => n + 1, 0);
-  React.useEffect(() => {
-    if (!enabled) return;
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [enabled]);
-}
-
 export default function Workout() {
   const unit = useWeightUnit();
   const focused = useIsFocused();
@@ -49,9 +40,16 @@ export default function Workout() {
   const [editing, setEditing] = React.useState<Exercise | null>(null);
 
   const rows = useWorkoutSelector(() =>
-    [...getExercises()]
-      .sort((a, b) => a.name.localeCompare(b.name))
+    getExercises()
       .map((exercise) => ({ exercise, last: lastSetFor(exercise.id) }))
+      // Most recently trained first; anything never done has no recency to sort
+      // on, so it collects at the end in name order.
+      .sort((a, b) => {
+        if (a.last && b.last) return b.last.at - a.last.at;
+        if (a.last) return -1;
+        if (b.last) return 1;
+        return a.exercise.name.localeCompare(b.exercise.name);
+      })
   );
 
   const openCreate = () => {

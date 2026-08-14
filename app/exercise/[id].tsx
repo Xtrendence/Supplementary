@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Alert, Keyboard, Pressable, View } from "react-native";
+import { useIsFocused } from "@react-navigation/native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Input, SafeAreaView, ScrollView, Text, cn } from "@/components/ui";
 import {
@@ -10,6 +11,7 @@ import {
 } from "@/components/ui/lib/icons";
 import { ExerciseSheet } from "@/components/ExerciseSheet";
 import { SetEditorSheet } from "@/components/SetEditorSheet";
+import { useSecondTick } from "@/hooks/useSecondTick";
 import { useTheme, useWeightUnit } from "@/lib/preferences";
 import { PB_COLORS, hsl, hslShifted } from "@/lib/themes";
 import { dateKey } from "@/lib/supplements";
@@ -42,6 +44,9 @@ export default function ExerciseDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const unit = useWeightUnit();
   const theme = useTheme();
+
+  // Keeps the "last trained" counter below the inputs ticking.
+  useSecondTick(useIsFocused());
 
   const exercise = useWorkoutSelector(() => (id ? getExercise(id) : null), [id]);
   const last = useWorkoutSelector(() => (id ? lastSetFor(id) : null), [id]);
@@ -80,6 +85,9 @@ export default function ExerciseDetail() {
   const handleAdd = () => {
     if (!id || !canAdd) return;
     addSet({ exerciseId: id, reps: parsedReps, weight: parsedWeight, unit });
+    // Reps are entered fresh for every set; the weight refills itself from the
+    // set that was just recorded.
+    setReps("");
     Keyboard.dismiss();
   };
 
