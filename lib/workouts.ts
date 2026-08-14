@@ -127,16 +127,21 @@ export function monthLabel(key: string): string {
 	});
 }
 
+/** "Sat. 8 Aug 2026" — always the full date, never a relative label. */
+export function fullDayLabel(key: string): string {
+	const d = dateFromKey(key);
+	return `${WEEKDAY_LABELS[d.getDay()]}. ${d.getDate()} ${
+		MONTH_LABELS[d.getMonth()]
+	} ${d.getFullYear()}`;
+}
+
 /** "Today" / "Yesterday" / "Sat. 8 Aug 2026" */
 export function dayLabel(key: string, today: string = dateKey()): string {
 	if (key === today) return "Today";
 	const yesterday = dateFromKey(today);
 	yesterday.setDate(yesterday.getDate() - 1);
 	if (key === dateKey(yesterday)) return "Yesterday";
-	const d = dateFromKey(key);
-	return `${WEEKDAY_LABELS[d.getDay()]}. ${d.getDate()} ${
-		MONTH_LABELS[d.getMonth()]
-	} ${d.getFullYear()}`;
+	return fullDayLabel(key);
 }
 
 const EXERCISES_KEY = "workout:exercises";
@@ -506,7 +511,7 @@ export function highlightSets(sets: WorkoutSet[]): SetHighlights {
 /** Plain-text summary of a day's workout, for the clipboard. */
 export function formatDayForClipboard(key: string, unit: WeightUnit): string {
 	const groups = groupByExercise(setsOnDate(key));
-	const lines: string[] = [dayLabel(key)];
+	const lines: string[] = [fullDayLabel(key)];
 	if (groups.length === 0) {
 		lines.push("", "No sets recorded.");
 		return lines.join("\n");

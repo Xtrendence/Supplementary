@@ -12,7 +12,7 @@ import { useWeightUnit } from "@/lib/preferences";
 import { DAY_LABELS, dateKey } from "@/lib/supplements";
 import {
   datesWithSets,
-  dayLabel,
+  fullDayLabel,
   formatDayForClipboard,
   formatReps,
   formatSetWeight,
@@ -189,7 +189,7 @@ export function WorkoutCalendar() {
         <View className="mt-2 border-t border-border pt-3">
           <View className="mb-3 flex-row items-center justify-between">
             <Text variant="small" className="flex-1 pr-3 font-semibold">
-              {dayLabel(selectedKey, todayKey)}
+              {fullDayLabel(selectedKey)}
             </Text>
             {groups.length > 0 ? (
               <Pressable
