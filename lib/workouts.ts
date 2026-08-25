@@ -10,6 +10,24 @@ export const WEIGHT_UNIT_OPTIONS: { value: WeightUnit; label: string }[] = [
 	{ value: "lbs", label: "lbs" },
 ];
 
+/** How quickly the set was performed. Left unset for an ordinary pace, which
+ *  is the common case and stays out of the data entirely. */
+export type SetSpeed = 1 | 2 | 3;
+
+export const SPEED_LABELS: Record<SetSpeed, string> = {
+	1: "Slow",
+	2: "Fast",
+	3: "As fast as possible",
+};
+
+export function toSpeed(value: unknown): SetSpeed | undefined {
+	const n =
+		typeof value === "number"
+			? value
+			: Number.parseInt(String(value ?? ""), 10);
+	return n === 1 || n === 2 || n === 3 ? n : undefined;
+}
+
 export interface Exercise {
 	id: string;
 	name: string;
@@ -28,6 +46,7 @@ export interface WorkoutSet {
 	reps: number;
 	weight: number;
 	unit: WeightUnit;
+	speed?: SetSpeed;
 	note?: string;
 }
 
@@ -324,6 +343,7 @@ export interface SetDraft {
 	reps: number;
 	weight: number;
 	unit: WeightUnit;
+	speed?: SetSpeed;
 	note?: string;
 	/** Defaults to now — supplied by importers and the mock generator. */
 	at?: number;
@@ -340,6 +360,7 @@ export function addSet(draft: SetDraft): WorkoutSet {
 		reps: draft.reps,
 		weight: draft.weight,
 		unit: draft.unit,
+		...(draft.speed ? { speed: draft.speed } : {}),
 		...(draft.note?.trim() ? { note: draft.note.trim() } : {}),
 	};
 	const month = monthKeyOfDate(date);
@@ -349,7 +370,7 @@ export function addSet(draft: SetDraft): WorkoutSet {
 }
 
 export type SetPatch = Partial<
-	Pick<WorkoutSet, "reps" | "weight" | "unit" | "note">
+	Pick<WorkoutSet, "reps" | "weight" | "unit" | "note" | "speed">
 >;
 
 export function updateSet(id: string, month: string, patch: SetPatch): void {
@@ -357,10 +378,17 @@ export function updateSet(id: string, month: string, patch: SetPatch): void {
 		month,
 		getMonthSets(month).map((s) => {
 			if (s.id !== id) return s;
-			const { note: _previous, ...rest } = { ...s, ...patch };
+			const { note: _note, speed: _speed, ...rest } = { ...s, ...patch };
 			const note =
 				patch.note === undefined ? s.note?.trim() : patch.note.trim();
-			return note ? { ...rest, note } : rest;
+			// Both fields are absent unless recorded, so passing an explicit
+			// undefined is how the editor clears one.
+			const speed = "speed" in patch ? patch.speed : s.speed;
+			return {
+				...rest,
+				...(speed ? { speed } : {}),
+				...(note ? { note } : {}),
+			};
 		}),
 	);
 	notify();
@@ -519,9 +547,10 @@ export function formatDayForClipboard(key: string, unit: WeightUnit): string {
 	for (const group of groups) {
 		lines.push("", group.name);
 		group.sets.forEach((set, i) => {
+			const speed = set.speed ? ` · ${SPEED_LABELS[set.speed]}` : "";
 			const note = set.note ? ` — ${set.note}` : "";
 			lines.push(
-				`  Set ${i + 1} · ${formatReps(set.reps)} · ${formatSetWeight(set, unit)}${note}`,
+				`  Set ${i + 1} · ${formatReps(set.reps)} · ${formatSetWeight(set, unit)}${speed}${note}`,
 			);
 		});
 	}
@@ -591,6 +620,7 @@ const CSV_COLUMNS = [
 	"reps",
 	"weight",
 	"unit",
+	"speed",
 	"note",
 ] as const;
 
@@ -611,6 +641,7 @@ export function buildWorkoutCsv(range: ExportRange): string {
 				String(set.reps),
 				String(set.weight),
 				set.unit,
+				set.speed ? String(set.speed) : "",
 				set.note ?? "",
 			]
 				.map(csvEscape)
@@ -668,6 +699,7 @@ interface PendingSet {
 	reps: number;
 	weight: number;
 	unit: WeightUnit;
+	speed?: SetSpeed;
 	note?: string;
 }
 
@@ -720,6 +752,7 @@ function mergeSets(
 			reps: item.reps,
 			weight: item.weight,
 			unit: item.unit,
+			...(item.speed ? { speed: item.speed } : {}),
 			...(item.note ? { note: item.note } : {}),
 		});
 		added += 1;
@@ -815,6 +848,7 @@ export function importWorkoutsFromJson(json: string): WorkoutImportResult {
 			reps,
 			weight,
 			unit: toUnit(r.unit),
+			speed: toSpeed(r.speed),
 			note:
 				typeof r.note === "string" && r.note.trim() ? r.note.trim() : undefined,
 		});
@@ -933,6 +967,7 @@ export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 
 	const timeCol = col("time");
 	const unitCol = col("unit");
+	const speedCol = col("speed", "pace");
 	const noteCol = col("note", "comment");
 	// Falls back to the unit named in the weight header, e.g. "Weight (kg)".
 	const headerUnit = unitFromLabel(header[weightCol]) ?? "kg";
@@ -970,6 +1005,7 @@ export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 			reps,
 			weight,
 			unit: unitCell ? toUnit(unitCell) : headerUnit,
+			speed: speedCol >= 0 ? toSpeed(row[speedCol]) : undefined,
 			note: note || undefined,
 		});
 	}
@@ -996,6 +1032,16 @@ const MOCK_EXERCISES: { name: string; reps: number[]; weight: number }[] = [
 	{ name: "Tricep Pushdown", reps: [15, 12, 12], weight: 20 },
 	{ name: "Seated Row", reps: [12, 10, 10], weight: 50 },
 	{ name: "Deadlift", reps: [8, 6, 5], weight: 80 },
+];
+
+// Mostly unrecorded, matching how it gets used in practice.
+const MOCK_SPEEDS: (SetSpeed | undefined)[] = [
+	undefined,
+	undefined,
+	undefined,
+	1,
+	2,
+	3,
 ];
 
 const MOCK_NOTES = [
@@ -1041,6 +1087,7 @@ export function generateMockWorkouts(): { exercises: number; sets: number } {
 					reps: Math.max(1, reps + (Math.random() > 0.7 ? 1 : 0)),
 					weight: preset.weight + progress + i * 0,
 					unit: "kg",
+					speed: MOCK_SPEEDS[Math.floor(Math.random() * MOCK_SPEEDS.length)],
 					note: MOCK_NOTES[Math.floor(Math.random() * MOCK_NOTES.length)],
 					at: at.getTime(),
 				});
@@ -1067,6 +1114,7 @@ function addSetSilently(draft: SetDraft): void {
 			reps: draft.reps,
 			weight: draft.weight,
 			unit: draft.unit,
+			...(draft.speed ? { speed: draft.speed } : {}),
 			...(draft.note?.trim() ? { note: draft.note.trim() } : {}),
 		},
 	]);

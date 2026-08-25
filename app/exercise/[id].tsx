@@ -11,12 +11,14 @@ import {
 } from "@/components/ui/lib/icons";
 import { ExerciseSheet } from "@/components/ExerciseSheet";
 import { SetEditorSheet } from "@/components/SetEditorSheet";
+import { SpeedBars, SpeedSelector } from "@/components/SpeedSelector";
 import { useSecondTick } from "@/hooks/useSecondTick";
 import { useTheme, useWeightUnit } from "@/lib/preferences";
 import { PB_COLORS, hsl, hslShifted } from "@/lib/themes";
 import { dateKey } from "@/lib/supplements";
 import {
   type SetPatch,
+  type SetSpeed,
   type WorkoutSet,
   addSet,
   dayLabel,
@@ -62,6 +64,7 @@ export default function ExerciseDetail() {
 
   const [reps, setReps] = React.useState("");
   const [weight, setWeight] = React.useState("");
+  const [speed, setSpeed] = React.useState<SetSpeed | undefined>(undefined);
   const [editingSet, setEditingSet] = React.useState<{
     set: WorkoutSet;
     number: number;
@@ -84,10 +87,17 @@ export default function ExerciseDetail() {
 
   const handleAdd = () => {
     if (!id || !canAdd) return;
-    addSet({ exerciseId: id, reps: parsedReps, weight: parsedWeight, unit });
-    // Reps are entered fresh for every set; the weight refills itself from the
-    // set that was just recorded.
+    addSet({
+      exerciseId: id,
+      reps: parsedReps,
+      weight: parsedWeight,
+      unit,
+      speed,
+    });
+    // Reps and speed are entered fresh for every set; the weight refills itself
+    // from the set that was just recorded.
     setReps("");
+    setSpeed(undefined);
     Keyboard.dismiss();
   };
 
@@ -152,6 +162,13 @@ export default function ExerciseDetail() {
               selectTextOnFocus
             />
           </View>
+          <View>
+            <Text variant="small" className="mb-2 text-muted-foreground">
+              Speed
+            </Text>
+            <SpeedSelector value={speed} onChange={setSpeed} />
+          </View>
+
           <Pressable
             onPress={handleAdd}
             disabled={!canAdd}
@@ -376,6 +393,12 @@ function SetCard({
             reps
           </Text>
         </View>
+
+        {set.speed ? (
+          <View className="mr-3">
+            <SpeedBars speed={set.speed} color={weightColor} />
+          </View>
+        ) : null}
 
         <View className="flex-row items-baseline">
           <Text className="text-lg font-semibold" style={{ color: weightColor }}>

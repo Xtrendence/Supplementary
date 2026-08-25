@@ -3,8 +3,10 @@ import { Alert, Pressable, View } from "react-native";
 import { Button, Input, Text } from "@/components/ui";
 import { Trash2Icon } from "@/components/ui/lib/icons";
 import { SlideUpSheet } from "@/components/SlideUpSheet";
+import { SpeedSelector } from "@/components/SpeedSelector";
 import {
   type SetPatch,
+  type SetSpeed,
   type WeightUnit,
   type WorkoutSet,
   dayLabel,
@@ -30,6 +32,7 @@ export function SetEditorSheet({
   const [reps, setReps] = React.useState("");
   const [weight, setWeight] = React.useState("");
   const [note, setNote] = React.useState("");
+  const [speed, setSpeed] = React.useState<SetSpeed | undefined>(undefined);
 
   // The weight is shown in the current display unit; if it's left untouched the
   // original value and unit are kept so nothing drifts through conversion.
@@ -40,6 +43,7 @@ export function SetEditorSheet({
     setReps(String(set.reps));
     setWeight(String(roundWeight(weightIn(set, unit))));
     setNote(set.note ?? "");
+    setSpeed(set.speed);
   }, [set, unit]);
 
   const parsedReps = Number.parseInt(reps, 10);
@@ -57,6 +61,7 @@ export function SetEditorSheet({
       reps: parsedReps,
       weight: unchanged ? set.weight : parsedWeight,
       unit: unchanged ? set.unit : unit,
+      speed,
       note,
     });
   };
@@ -117,6 +122,13 @@ export function SetEditorSheet({
               selectTextOnFocus
             />
           </View>
+        </View>
+
+        <View className="mt-4">
+          <Text variant="small" className="mb-2 text-muted-foreground">
+            Speed
+          </Text>
+          <SpeedSelector value={speed} onChange={setSpeed} />
         </View>
 
         <View className="mt-4">
