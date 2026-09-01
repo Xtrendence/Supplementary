@@ -490,17 +490,22 @@ export function groupByExercise(sets: WorkoutSet[]): ExerciseGroup[] {
 }
 
 export interface SetHighlights {
+	pbId: string | null;
+	bothId: string | null;
 	heaviestId: string | null;
 	mostRepsId: string | null;
-	bothId: string | null;
 }
 
-/** Picks the best set by each measure, always landing on three different sets
- *  so all three markers stay visible.
+/** Picks the best set by each measure, always landing on different sets so
+ *  every marker stays visible.
  *
- *  The set that tops both weight and reps is claimed first, then the heaviest
- *  of whatever is left, then the highest-rep set of what remains after that.
- *  Ties go to the most recent set. */
+ *  Claimed in order of standing: the personal best (the most reps at the
+ *  heaviest weight) outranks everything, then a set tying both peaks, then the
+ *  heaviest of whatever is left, then the highest-rep set of what remains. Ties
+ *  go to the most recent set.
+ *
+ *  Because the PB is by definition also the top set on both measures whenever
+ *  one exists, `bothId` only lands on a *second* set matching both peaks. */
 export function highlightSets(sets: WorkoutSet[]): SetHighlights {
 	const best = (
 		pool: WorkoutSet[],
@@ -519,17 +524,28 @@ export function highlightSets(sets: WorkoutSet[]): SetHighlights {
 	// that ties for most reps still counts as topping both.
 	const peakWeight = sets.reduce((max, s) => Math.max(max, byWeight(s)), 0);
 	const peakReps = sets.reduce((max, s) => Math.max(max, byReps(s)), 0);
+	// The best effort at the top load, which is what a personal best on this
+	// exercise actually means, and it outranks every other marker.
+	const pb = best(
+		sets.filter((s) => weightKg(s) === peakWeight),
+		byReps,
+	);
+
+	const afterPb = sets.filter((s) => s.id !== pb?.id);
 	const both = best(
-		sets.filter((s) => weightKg(s) === peakWeight && s.reps === peakReps),
+		afterPb.filter(
+			(s) => weightKg(s) === peakWeight && s.reps === peakReps,
+		),
 		byWeight,
 	);
 
-	const afterBoth = sets.filter((s) => s.id !== both?.id);
+	const afterBoth = afterPb.filter((s) => s.id !== both?.id);
 	const heaviest = best(afterBoth, byWeight);
 	const afterHeaviest = afterBoth.filter((s) => s.id !== heaviest?.id);
 	const mostReps = best(afterHeaviest, byReps);
 
 	return {
+		pbId: pb?.id ?? null,
 		bothId: both?.id ?? null,
 		heaviestId: heaviest?.id ?? null,
 		mostRepsId: mostReps?.id ?? null,

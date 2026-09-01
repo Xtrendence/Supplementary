@@ -363,12 +363,14 @@ export function hslShifted(triplet: string, degrees: number): string {
   return `hsl(${hue}, ${s}, ${l})`;
 }
 
-/** Fixed markers for personal bests, so they mean the same thing whichever
- *  theme is active. */
-export const PB_COLORS = {
+/** Fixed marker colours for the standout sets, so each one means the same thing
+ *  whichever theme is active. Hues are spread apart to stay distinguishable as
+ *  thin borders. */
+export const SET_MARKER_COLORS = {
+  pb: "#f43f5e",
+  both: "#a855f7",
   weight: "#f59e0b",
   reps: "#38bdf8",
-  both: "#a855f7",
 } as const;
 
 export function themeVars(theme: Theme) {

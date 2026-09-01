@@ -1,6 +1,5 @@
 import * as React from "react";
 import { Pressable, View } from "react-native";
-import Constants from "expo-constants";
 import { useFocusEffect } from "expo-router";
 import { SafeAreaView, ScrollView, Switch, Text, cn } from "@/components/ui";
 import { DownloadIcon, DumbbellIcon, PillIcon } from "@/components/ui/lib/icons";
@@ -237,11 +236,10 @@ export default function Settings() {
           ) : null}
         </SettingsCard>
 
+        {/* The installed native version, the same value the update check
+            compares against, so the two can't disagree. */}
         <Text variant="muted" className="mt-6 px-1 text-center text-xs">
-          Supplementary v
-          {Constants.expoConfig?.version ??
-            Constants.nativeAppVersion ??
-            "0.1.0"}
+          Supplementary v{currentVersion()}
         </Text>
       </ScrollView>
     </SafeAreaView>

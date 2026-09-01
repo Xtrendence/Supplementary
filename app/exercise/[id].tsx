@@ -14,7 +14,7 @@ import { SetEditorSheet } from "@/components/SetEditorSheet";
 import { SpeedBars, SpeedSelector } from "@/components/SpeedSelector";
 import { useSecondTick } from "@/hooks/useSecondTick";
 import { useTheme, useWeightUnit } from "@/lib/preferences";
-import { PB_COLORS, hsl, hslShifted } from "@/lib/themes";
+import { SET_MARKER_COLORS, hsl, hslShifted } from "@/lib/themes";
 import { dateKey } from "@/lib/supplements";
 import {
   type SetPatch,
@@ -230,13 +230,15 @@ export default function ExerciseDetail() {
                     repsColor={repsColor}
                     weightColor={weightColor}
                     borderColor={
-                      set.id === highlights.bothId
-                        ? PB_COLORS.both
-                        : set.id === highlights.heaviestId
-                          ? PB_COLORS.weight
-                          : set.id === highlights.mostRepsId
-                            ? PB_COLORS.reps
-                            : hsl(theme.palette.border)
+                      set.id === highlights.pbId
+                        ? SET_MARKER_COLORS.pb
+                        : set.id === highlights.bothId
+                          ? SET_MARKER_COLORS.both
+                          : set.id === highlights.heaviestId
+                            ? SET_MARKER_COLORS.weight
+                            : set.id === highlights.mostRepsId
+                              ? SET_MARKER_COLORS.reps
+                              : hsl(theme.palette.border)
                     }
                     onPress={() => setEditingSet({ set, number: index + 1 })}
                   />
@@ -337,9 +339,10 @@ function Header({
 function Legend() {
   return (
     <View className="mb-4 flex-row flex-wrap items-center gap-x-4 gap-y-1 px-1">
-      <LegendDot color={PB_COLORS.weight} label="Heaviest" />
-      <LegendDot color={PB_COLORS.reps} label="Most reps" />
-      <LegendDot color={PB_COLORS.both} label="Both" />
+      <LegendDot color={SET_MARKER_COLORS.pb} label="PB" />
+      <LegendDot color={SET_MARKER_COLORS.both} label="Both" />
+      <LegendDot color={SET_MARKER_COLORS.weight} label="Heaviest" />
+      <LegendDot color={SET_MARKER_COLORS.reps} label="Most reps" />
     </View>
   );
 }
