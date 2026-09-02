@@ -6,10 +6,15 @@ import { SafeAreaView, ScrollView, Text, cn } from "@/components/ui";
 import {
   ChevronRightIcon,
   DumbbellIcon,
+  LineChartIcon,
   PlusIcon,
   TimerIcon,
 } from "@/components/ui/lib/icons";
 import { ExerciseSheet } from "@/components/ExerciseSheet";
+import {
+  ProgressChartModal,
+  type ProgressChartTarget,
+} from "@/components/ProgressChartModal";
 import { useSecondTick } from "@/hooks/useSecondTick";
 import { setActiveSection, useWeightUnit } from "@/lib/preferences";
 import {
@@ -38,14 +43,20 @@ export default function Workout() {
 
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Exercise | null>(null);
+  const [chart, setChart] = React.useState<ProgressChartTarget | null>(null);
 
   const rows = useWorkoutSelector(() =>
     getExercises()
       .map((exercise) => ({ exercise, last: lastSetFor(exercise.id) }))
-      // Most recently trained first; anything never done has no recency to sort
-      // on, so it collects at the end in name order.
+      // Most recently trained first. Exercises can share a timestamp — a CSV
+      // with no time column stamps every row that day at midday — so ties fall
+      // back to the name rather than to whatever order they were created in.
+      // Anything never done has no recency at all and collects at the end.
       .sort((a, b) => {
-        if (a.last && b.last) return b.last.at - a.last.at;
+        if (a.last && b.last) {
+          if (b.last.at !== a.last.at) return b.last.at - a.last.at;
+          return a.exercise.name.localeCompare(b.exercise.name);
+        }
         if (a.last) return -1;
         if (b.last) return 1;
         return a.exercise.name.localeCompare(b.exercise.name);
@@ -135,10 +146,19 @@ export default function Workout() {
                 })
               }
               onLongPress={() => openEdit(exercise)}
+              onShowChart={() =>
+                setChart({
+                  title: exercise.name,
+                  metrics: ["volume", "weight"],
+                  exerciseId: exercise.id,
+                })
+              }
             />
           ))
         )}
       </ScrollView>
+
+      <ProgressChartModal target={chart} onClose={() => setChart(null)} />
 
       <ExerciseSheet
         visible={sheetOpen}
@@ -157,12 +177,14 @@ function ExerciseRow({
   unit,
   onPress,
   onLongPress,
+  onShowChart,
 }: {
   exercise: Exercise;
   last: WorkoutSet | null;
   unit: ReturnType<typeof useWeightUnit>;
   onPress: () => void;
   onLongPress: () => void;
+  onShowChart: () => void;
 }) {
   return (
     <Pressable
@@ -203,6 +225,15 @@ function ExerciseRow({
           </Text>
         )}
       </View>
+
+      <Pressable
+        onPress={onShowChart}
+        hitSlop={8}
+        accessibilityLabel={`${exercise.name} progress`}
+        className="mr-1 h-10 w-10 items-center justify-center rounded-full border border-border active:bg-secondary"
+      >
+        <LineChartIcon className="h-5 w-5 text-primary" />
+      </Pressable>
 
       <ChevronRightIcon className="h-5 w-5 text-muted-foreground" />
     </Pressable>

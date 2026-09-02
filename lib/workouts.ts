@@ -163,9 +163,48 @@ export function dayLabel(key: string, today: string = dateKey()): string {
 	return fullDayLabel(key);
 }
 
+export const PAIN_MAX = 10;
+
+/** A pain or irritation reading. Recorded independently of any workout so
+ *  off-days can be tracked too, which is the point — it's what makes the
+ *  after-effects of a given session visible. */
+export interface PainEntry {
+	id: string;
+	/** YYYY-MM-DD in local time. Grouping and bucketing key. */
+	date: string;
+	/** Full ISO 8601 timestamp of the moment it was recorded. */
+	at: string;
+	/** 0 to PAIN_MAX. */
+	level: number;
+	/** Optional — what hurt, or anything else worth remembering. */
+	note?: string;
+}
+
+export function clampPainLevel(value: number): number {
+	if (!Number.isFinite(value)) return 0;
+	return Math.min(PAIN_MAX, Math.max(0, Math.round(value)));
+}
+
+export function toPainLevel(value: unknown): number | null {
+	const n =
+		typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
+	if (!Number.isFinite(n) || n < 0 || n > PAIN_MAX) return null;
+	return Math.round(n);
+}
+
+/** "09:12" in local time. */
+export function formatPainTime(entry: PainEntry): string {
+	return new Date(entry.at).toLocaleTimeString(undefined, {
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+}
+
 const EXERCISES_KEY = "workout:exercises";
 const MONTHS_KEY = "workout:months";
 const setsKey = (month: string) => `workout:sets:${month}`;
+const PAIN_MONTHS_KEY = "pain:months";
+const painKey = (month: string) => `pain:entries:${month}`;
 
 const listeners = new Set<() => void>();
 let version = 0;
@@ -173,6 +212,8 @@ let version = 0;
 let exercisesCache: Exercise[] | null = null;
 let monthsCache: string[] | null = null;
 const setsCache = new Map<string, WorkoutSet[]>();
+let painMonthsCache: string[] | null = null;
+const painCache = new Map<string, PainEntry[]>();
 
 function subscribe(listener: () => void): () => void {
 	listeners.add(listener);
@@ -278,6 +319,119 @@ function isSet(value: unknown): value is WorkoutSet {
 		typeof r.reps === "number" &&
 		typeof r.weight === "number"
 	);
+}
+
+/** Every month holding at least one pain reading, oldest first. */
+export function getPainMonths(): string[] {
+	if (painMonthsCache === null) {
+		const list = readJson<string[]>(PAIN_MONTHS_KEY, []);
+		painMonthsCache = Array.isArray(list)
+			? [...new Set(list.filter((m) => typeof m === "string"))].sort()
+			: [];
+	}
+	return painMonthsCache;
+}
+
+export function getPainEntries(month: string): PainEntry[] {
+	const cached = painCache.get(month);
+	if (cached) return cached;
+	const list = readJson<PainEntry[]>(painKey(month), []);
+	const clean = Array.isArray(list) ? list.filter(isPainEntry) : [];
+	clean.sort((a, b) => a.at.localeCompare(b.at));
+	painCache.set(month, clean);
+	return clean;
+}
+
+function isPainEntry(value: unknown): value is PainEntry {
+	if (!value || typeof value !== "object") return false;
+	const r = value as Record<string, unknown>;
+	return (
+		typeof r.id === "string" &&
+		typeof r.date === "string" &&
+		typeof r.at === "string" &&
+		typeof r.level === "number"
+	);
+}
+
+function commitPainMonths(next: string[]): void {
+	painMonthsCache = [...new Set(next)].sort();
+	storage.set(PAIN_MONTHS_KEY, JSON.stringify(painMonthsCache));
+}
+
+function commitPainEntries(month: string, next: PainEntry[]): void {
+	const sorted = [...next].sort((a, b) => a.at.localeCompare(b.at));
+	if (sorted.length === 0) {
+		painCache.delete(month);
+		storage.remove(painKey(month));
+		commitPainMonths(getPainMonths().filter((m) => m !== month));
+		return;
+	}
+	painCache.set(month, sorted);
+	storage.set(painKey(month), JSON.stringify(sorted));
+	if (!getPainMonths().includes(month)) {
+		commitPainMonths([...getPainMonths(), month]);
+	}
+}
+
+export function addPainEntry(
+	level: number,
+	options: { note?: string; when?: Date } = {},
+): PainEntry {
+	const when = options.when ?? new Date();
+	const date = dateKey(when);
+	const note = options.note?.trim();
+	const entry: PainEntry = {
+		id: makeId("p"),
+		date,
+		at: when.toISOString(),
+		level: clampPainLevel(level),
+		...(note ? { note } : {}),
+	};
+	const month = monthKeyOfDate(date);
+	commitPainEntries(month, [...getPainEntries(month), entry]);
+	notify();
+	return entry;
+}
+
+/** A blank or omitted note removes it, the same way set notes behave. */
+export function updatePainEntry(
+	id: string,
+	month: string,
+	level: number,
+	note?: string,
+): void {
+	const trimmed = note?.trim();
+	commitPainEntries(
+		month,
+		getPainEntries(month).map((e) => {
+			if (e.id !== id) return e;
+			const { note: _previous, ...rest } = e;
+			return {
+				...rest,
+				level: clampPainLevel(level),
+				...(trimmed ? { note: trimmed } : {}),
+			};
+		}),
+	);
+	notify();
+}
+
+export function deletePainEntry(id: string, month: string): void {
+	commitPainEntries(
+		month,
+		getPainEntries(month).filter((e) => e.id !== id),
+	);
+	notify();
+}
+
+export function painOnDate(key: string): PainEntry[] {
+	return getPainEntries(monthKeyOfDate(key)).filter((e) => e.date === key);
+}
+
+export function datesWithPain(month: string): Set<string> {
+	const keys = new Set<string>();
+	for (const entry of getPainEntries(month)) keys.add(entry.date);
+	return keys;
 }
 
 function commitExercises(next: Exercise[]): void {
@@ -555,11 +709,13 @@ export function highlightSets(sets: WorkoutSet[]): SetHighlights {
 /** Plain-text summary of a day's workout, for the clipboard. */
 export function formatDayForClipboard(key: string, unit: WeightUnit): string {
 	const groups = groupByExercise(setsOnDate(key));
+	const pain = painOnDate(key);
 	const lines: string[] = [fullDayLabel(key)];
-	if (groups.length === 0) {
-		lines.push("", "No sets recorded.");
+	if (groups.length === 0 && pain.length === 0) {
+		lines.push("", "Nothing recorded.");
 		return lines.join("\n");
 	}
+	if (groups.length === 0) lines.push("", "No sets recorded.");
 	for (const group of groups) {
 		lines.push("", group.name);
 		group.sets.forEach((set, i) => {
@@ -570,6 +726,15 @@ export function formatDayForClipboard(key: string, unit: WeightUnit): string {
 			);
 		});
 	}
+	if (pain.length > 0) {
+		lines.push("", "Pain / irritation");
+		for (const entry of pain) {
+			const note = entry.note ? ` — ${entry.note}` : "";
+			lines.push(
+				`  ${formatPainTime(entry)} · ${entry.level}/${PAIN_MAX}${note}`,
+			);
+		}
+	}
 	return lines.join("\n");
 }
 
@@ -578,7 +743,12 @@ export function clearAllWorkouts(): void {
 		storage.remove(setsKey(month));
 		setsCache.delete(month);
 	}
+	for (const month of getPainMonths()) {
+		storage.remove(painKey(month));
+		painCache.delete(month);
+	}
 	commitMonths([]);
+	commitPainMonths([]);
 	commitExercises([]);
 	notify();
 }
@@ -607,6 +777,22 @@ export function setsForRange(range: ExportRange): WorkoutSet[] {
 		.sort((a, b) => a.at - b.at);
 }
 
+export function painForRange(range: ExportRange): PainEntry[] {
+	const all = getPainMonths();
+	const months =
+		range === "all"
+			? all
+			: (() => {
+					const window = new Set(
+						recentMonthKeys({ "1m": 1, "3m": 3, "6m": 6, "12m": 12 }[range]),
+					);
+					return all.filter((m) => window.has(m));
+				})();
+	return months
+		.flatMap((m) => getPainEntries(m))
+		.sort((a, b) => a.at.localeCompare(b.at));
+}
+
 export interface WorkoutExportPayload {
 	app: "Supplementary";
 	type: "workouts";
@@ -615,6 +801,7 @@ export interface WorkoutExportPayload {
 	range: ExportRange;
 	exercises: Exercise[];
 	sets: WorkoutSet[];
+	pain: PainEntry[];
 }
 
 export function buildWorkoutExport(range: ExportRange): WorkoutExportPayload {
@@ -626,10 +813,15 @@ export function buildWorkoutExport(range: ExportRange): WorkoutExportPayload {
 		range,
 		exercises: getExercises(),
 		sets: setsForRange(range),
+		pain: painForRange(range),
 	};
 }
 
+/** One flat table for both kinds of record, discriminated by `type`, so a day
+ *  can hold any number of pain readings and an off-day can appear with no sets
+ *  at all. Spreadsheets open it as a single sheet. */
 const CSV_COLUMNS = [
+	"type",
 	"date",
 	"time",
 	"exercise",
@@ -637,6 +829,7 @@ const CSV_COLUMNS = [
 	"weight",
 	"unit",
 	"speed",
+	"pain",
 	"note",
 ] as const;
 
@@ -647,10 +840,12 @@ function csvEscape(value: string): string {
 export function buildWorkoutCsv(range: ExportRange): string {
 	const names = new Map(getExercises().map((e) => [e.id, e.name]));
 	const rows = [CSV_COLUMNS.join(",")];
+
 	for (const set of setsForRange(range)) {
 		const time = new Date(set.at).toTimeString().slice(0, 8);
 		rows.push(
 			[
+				"set",
 				set.date,
 				time,
 				names.get(set.exerciseId) ?? "Deleted exercise",
@@ -658,12 +853,34 @@ export function buildWorkoutCsv(range: ExportRange): string {
 				String(set.weight),
 				set.unit,
 				set.speed ? String(set.speed) : "",
+				"",
 				set.note ?? "",
 			]
 				.map(csvEscape)
 				.join(","),
 		);
 	}
+
+	for (const entry of painForRange(range)) {
+		const time = new Date(entry.at).toTimeString().slice(0, 8);
+		rows.push(
+			[
+				"pain",
+				entry.date,
+				time,
+				"",
+				"",
+				"",
+				"",
+				"",
+				String(entry.level),
+				entry.note ?? "",
+			]
+				.map(csvEscape)
+				.join(","),
+		);
+	}
+
 	return rows.join("\n");
 }
 
@@ -672,7 +889,21 @@ export interface WorkoutImportResult {
 	added: number;
 	skipped: number;
 	exercisesAdded: number;
+	painAdded: number;
+	painSkipped: number;
 	error?: string;
+}
+
+function importFailed(error: string): WorkoutImportResult {
+	return {
+		ok: false,
+		added: 0,
+		skipped: 0,
+		exercisesAdded: 0,
+		painAdded: 0,
+		painSkipped: 0,
+		error,
+	};
 }
 
 function findOrCreateExercise(
@@ -709,6 +940,15 @@ function signature(set: {
 	return `${set.exerciseId}|${set.at}|${set.reps}|${set.weight}`;
 }
 
+interface PendingPain {
+	/** YYYY-MM-DD in local time. */
+	date: string;
+	/** ISO 8601. */
+	at: string;
+	level: number;
+	note?: string;
+}
+
 interface PendingSet {
 	exerciseId: string;
 	at: number;
@@ -721,8 +961,9 @@ interface PendingSet {
 
 /** Imports merge rather than replace, so a ranged export can be restored
  *  without wiping months it never contained. */
-function mergeSets(
+function mergeRecords(
 	pending: PendingSet[],
+	pendingPain: PendingPain[],
 	exercisesAdded: number,
 ): WorkoutImportResult {
 	const byMonth = new Map<string, WorkoutSet[]>();
@@ -774,9 +1015,48 @@ function mergeSets(
 		added += 1;
 	}
 
+	// Pain readings dedupe the same way, on their timestamp and level.
+	const painByMonth = new Map<string, PainEntry[]>();
+	const painStored = new Map<string, number>();
+	for (const month of getPainMonths()) {
+		for (const entry of getPainEntries(month)) {
+			const sig = `${entry.at}|${entry.level}`;
+			painStored.set(sig, (painStored.get(sig) ?? 0) + 1);
+		}
+	}
+
+	let painAdded = 0;
+	let painSkipped = 0;
+
+	for (const item of pendingPain) {
+		const sig = `${item.at}|${item.level}`;
+		const unmatched = painStored.get(sig) ?? 0;
+		if (unmatched > 0) {
+			painStored.set(sig, unmatched - 1);
+			painSkipped += 1;
+			continue;
+		}
+
+		const month = monthKeyOfDate(item.date);
+		let bucket = painByMonth.get(month);
+		if (!bucket) {
+			bucket = [...getPainEntries(month)];
+			painByMonth.set(month, bucket);
+		}
+		bucket.push({
+			id: makeId("p"),
+			date: item.date,
+			at: item.at,
+			level: item.level,
+			...(item.note ? { note: item.note } : {}),
+		});
+		painAdded += 1;
+	}
+
 	for (const [month, sets] of byMonth) commitMonthSets(month, sets);
+	for (const [month, entries] of painByMonth) commitPainEntries(month, entries);
 	notify();
-	return { ok: true, added, skipped, exercisesAdded };
+	return { ok: true, added, skipped, exercisesAdded, painAdded, painSkipped };
 }
 
 function toUnit(value: unknown): WeightUnit {
@@ -794,25 +1074,14 @@ export function importWorkoutsFromJson(json: string): WorkoutImportResult {
 	try {
 		parsed = JSON.parse(json);
 	} catch {
-		return {
-			ok: false,
-			added: 0,
-			skipped: 0,
-			exercisesAdded: 0,
-			error: "The file isn't valid JSON.",
-		};
+		return importFailed("The file isn't valid JSON.");
 	}
 
 	const root = (parsed ?? {}) as Record<string, unknown>;
 	const rawSets = Array.isArray(parsed) ? parsed : root.sets;
-	if (!Array.isArray(rawSets)) {
-		return {
-			ok: false,
-			added: 0,
-			skipped: 0,
-			exercisesAdded: 0,
-			error: "No workout sets found in that file.",
-		};
+	const rawPain = Array.isArray(root.pain) ? root.pain : [];
+	if (!Array.isArray(rawSets) && rawPain.length === 0) {
+		return importFailed("No workout sets or pain records found in that file.");
 	}
 
 	const createdIds = new Set<string>();
@@ -827,8 +1096,24 @@ export function importWorkoutsFromJson(json: string): WorkoutImportResult {
 		}
 	}
 
+	const pendingPain: PendingPain[] = [];
+	for (const raw of rawPain) {
+		if (!raw || typeof raw !== "object") continue;
+		const r = raw as Record<string, unknown>;
+		const level = toPainLevel(r.level ?? r.pain);
+		const at = typeof r.at === "string" ? new Date(r.at) : null;
+		if (level === null || !at || Number.isNaN(at.getTime())) continue;
+		pendingPain.push({
+			date: typeof r.date === "string" ? r.date : dateKey(at),
+			at: at.toISOString(),
+			level,
+			note:
+				typeof r.note === "string" && r.note.trim() ? r.note.trim() : undefined,
+		});
+	}
+
 	const pending: PendingSet[] = [];
-	for (const raw of rawSets) {
+	for (const raw of Array.isArray(rawSets) ? rawSets : []) {
 		if (!raw || typeof raw !== "object") continue;
 		const r = raw as Record<string, unknown>;
 
@@ -870,17 +1155,11 @@ export function importWorkoutsFromJson(json: string): WorkoutImportResult {
 		});
 	}
 
-	if (pending.length === 0 && createdIds.size === 0) {
-		return {
-			ok: false,
-			added: 0,
-			skipped: 0,
-			exercisesAdded: 0,
-			error: "No usable workout sets found in that file.",
-		};
+	if (pending.length === 0 && pendingPain.length === 0 && createdIds.size === 0) {
+		return importFailed("No usable workout sets found in that file.");
 	}
 
-	return mergeSets(pending, createdIds.size);
+	return mergeRecords(pending, pendingPain, createdIds.size);
 }
 
 /** Minimal RFC-4180 style parser — handles quoted fields and embedded commas. */
@@ -944,13 +1223,7 @@ function unitFromLabel(label: string): WeightUnit | null {
 export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 	const rows = parseCsv(text);
 	if (rows.length < 2) {
-		return {
-			ok: false,
-			added: 0,
-			skipped: 0,
-			exercisesAdded: 0,
-			error: "That CSV has no rows to import.",
-		};
+		return importFailed("That CSV has no rows to import.");
 	}
 
 	const header = rows[0].map((h) => h.trim().toLowerCase());
@@ -970,15 +1243,14 @@ export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 	const exerciseCol = col("exercise", "workout", "name");
 	const repsCol = col("reps", "rep");
 	const weightCol = col("weight", "kg", "lbs", "load");
+	const typeCol = col("type", "kind");
+	const painCol = col("pain", "irritation", "level");
 
-	if (dateCol < 0 || exerciseCol < 0 || repsCol < 0 || weightCol < 0) {
-		return {
-			ok: false,
-			added: 0,
-			skipped: 0,
-			exercisesAdded: 0,
-			error: "CSV needs at least date, exercise, reps and weight columns.",
-		};
+	const canReadSets = exerciseCol >= 0 && repsCol >= 0 && weightCol >= 0;
+	if (dateCol < 0 || (!canReadSets && painCol < 0)) {
+		return importFailed(
+			"CSV needs a date column, plus either exercise/reps/weight or pain.",
+		);
 	}
 
 	const timeCol = col("time");
@@ -990,10 +1262,44 @@ export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 
 	const createdIds = new Set<string>();
 	const pending: PendingSet[] = [];
+	const pendingPain: PendingPain[] = [];
+
+	// Rebuilds the recorded instant from a local date plus an optional time,
+	// defaulting to midday when the file carries no clock value.
+	const timestampFor = (dateValue: string, row: string[]): Date => {
+		const base = dateFromKey(dateValue);
+		const time = timeCol >= 0 ? (row[timeCol] ?? "").trim() : "";
+		const [h, m, sec] = time.split(":").map((n) => Number.parseInt(n, 10));
+		base.setHours(
+			Number.isFinite(h) ? h : 12,
+			Number.isFinite(m) ? m : 0,
+			Number.isFinite(sec) ? sec : 0,
+			0,
+		);
+		return base;
+	};
 
 	for (const row of rows.slice(1)) {
 		const dateValue = parseCsvDate(row[dateCol] ?? "");
 		if (!dateValue) continue;
+
+		// A `type` of "pain" marks a reading; anything else (including the "Set"
+		// that third-party exports write on every row) is a set.
+		const rowType =
+			typeCol >= 0 ? (row[typeCol] ?? "").trim().toLowerCase() : "";
+		if (rowType === "pain" || rowType === "irritation") {
+			const level = painCol >= 0 ? toPainLevel(row[painCol]) : null;
+			if (level === null) continue;
+			const painNote = noteCol >= 0 ? (row[noteCol] ?? "").trim() : "";
+			pendingPain.push({
+				date: dateValue,
+				at: timestampFor(dateValue, row).toISOString(),
+				level,
+				note: painNote || undefined,
+			});
+			continue;
+		}
+		if (!canReadSets) continue;
 
 		const exercise = findOrCreateExercise(row[exerciseCol] ?? "", createdIds);
 		if (!exercise) continue;
@@ -1002,22 +1308,12 @@ export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 		const weight = toNumber(row[weightCol]);
 		if (reps === null || weight === null) continue;
 
-		const base = dateFromKey(dateValue);
-		const time = timeCol >= 0 ? (row[timeCol] ?? "").trim() : "";
-		const [h, m, s] = time.split(":").map((n) => Number.parseInt(n, 10));
-		base.setHours(
-			Number.isFinite(h) ? h : 12,
-			Number.isFinite(m) ? m : 0,
-			Number.isFinite(s) ? s : 0,
-			0,
-		);
-
 		const unitCell =
 			unitCol >= 0 ? (row[unitCol] ?? "").trim().toLowerCase() : "";
 		const note = noteCol >= 0 ? (row[noteCol] ?? "").trim() : "";
 		pending.push({
 			exerciseId: exercise.id,
-			at: base.getTime(),
+			at: timestampFor(dateValue, row).getTime(),
 			reps,
 			weight,
 			unit: unitCell ? toUnit(unitCell) : headerUnit,
@@ -1026,17 +1322,11 @@ export function importWorkoutsFromCsv(text: string): WorkoutImportResult {
 		});
 	}
 
-	if (pending.length === 0) {
-		return {
-			ok: false,
-			added: 0,
-			skipped: 0,
-			exercisesAdded: 0,
-			error: "No usable rows found in that CSV.",
-		};
+	if (pending.length === 0 && pendingPain.length === 0) {
+		return importFailed("No usable rows found in that CSV.");
 	}
 
-	return mergeSets(pending, createdIds.size);
+	return mergeRecords(pending, pendingPain, createdIds.size);
 }
 
 const MOCK_EXERCISES: { name: string; reps: number[]; weight: number }[] = [
@@ -1060,6 +1350,16 @@ const MOCK_SPEEDS: (SetSpeed | undefined)[] = [
 	3,
 ];
 
+const MOCK_PAIN_NOTES = [
+	"",
+	"",
+	"",
+	"Left knee, dull ache",
+	"Right shoulder on overhead work",
+	"Lower back tight",
+	"Elbow twinge",
+];
+
 const MOCK_NOTES = [
 	"",
 	"",
@@ -1069,8 +1369,23 @@ const MOCK_NOTES = [
 	"Dropped a plate, form was off",
 ];
 
+/** Sample data has to stay in the past. A session stamped later today would
+ *  give a negative elapsed time, which the counter clamps to "0s" — so it sits
+ *  there reading zero instead of ticking. Returns null when the day is today
+ *  and it's too early for the session to have plausibly happened. */
+function mockHour(day: Date, preferred: number): number | null {
+	const now = new Date();
+	if (dateKey(day) !== dateKey(now)) return preferred;
+	const latest = now.getHours() - 1;
+	return latest < 1 ? null : Math.min(preferred, latest);
+}
+
 /** Replaces all workout data with ~4 months of plausible history. */
-export function generateMockWorkouts(): { exercises: number; sets: number } {
+export function generateMockWorkouts(): {
+	exercises: number;
+	sets: number;
+	pain: number;
+} {
 	clearAllWorkouts();
 
 	const exercises = MOCK_EXERCISES.map((preset) => ({
@@ -1090,13 +1405,16 @@ export function generateMockWorkouts(): { exercises: number; sets: number } {
 		const offset = day.getDay() === 1 ? 0 : day.getDay() === 3 ? half : 0;
 		const todays = exercises.slice(offset, offset + half);
 
+		const hour = mockHour(day, 18);
+		if (hour === null) continue;
+
 		let minute = 0;
 		for (const { preset, exercise } of todays) {
 			// Slow progressive overload over the 4 months.
 			const progress = Math.floor((120 - back) / 30) * 2.5;
 			preset.reps.forEach((reps, i) => {
 				const at = new Date(day);
-				at.setHours(18, minute, 0, 0);
+				at.setHours(hour, minute, 0, 0);
 				minute += 4;
 				addSetSilently({
 					exerciseId: exercise.id,
@@ -1112,8 +1430,39 @@ export function generateMockWorkouts(): { exercises: number; sets: number } {
 		}
 	}
 
+	// Readings land on rest days too, which is the whole point of tracking them
+	// separately from sets.
+	let pain = 0;
+	const painByMonth = new Map<string, PainEntry[]>();
+	for (let back = 120; back >= 0; back--) {
+		if (Math.random() > 0.55) continue;
+		const day = new Date();
+		day.setDate(day.getDate() - back);
+		const trained = [1, 3, 5].includes(day.getDay());
+		const painHour = mockHour(day, trained ? 21 : 9);
+		if (painHour === null) continue;
+		day.setHours(painHour, Math.floor(Math.random() * 60), 0, 0);
+		const base = trained ? 3 : 1;
+		const note = MOCK_PAIN_NOTES[
+			Math.floor(Math.random() * MOCK_PAIN_NOTES.length)
+		];
+		const entry: PainEntry = {
+			id: makeId("p"),
+			date: dateKey(day),
+			at: day.toISOString(),
+			level: clampPainLevel(base + Math.floor(Math.random() * 5)),
+			...(note ? { note } : {}),
+		};
+		const month = monthKeyOfDate(entry.date);
+		const bucket = painByMonth.get(month) ?? [];
+		bucket.push(entry);
+		painByMonth.set(month, bucket);
+		pain += 1;
+	}
+	for (const [month, entries] of painByMonth) commitPainEntries(month, entries);
+
 	notify();
-	return { exercises: exercises.length, sets };
+	return { exercises: exercises.length, sets, pain };
 }
 
 function addSetSilently(draft: SetDraft): void {

@@ -16,6 +16,7 @@ import {
   FileJson,
   FileSpreadsheet,
   Home,
+  LineChart,
   Menu,
   Package,
   Pencil,
@@ -50,6 +51,7 @@ export const DumbbellIcon = iconWithClassName(Dumbbell);
 export const FileJsonIcon = iconWithClassName(FileJson);
 export const FileSpreadsheetIcon = iconWithClassName(FileSpreadsheet);
 export const HomeIcon = iconWithClassName(Home);
+export const LineChartIcon = iconWithClassName(LineChart);
 export const MenuIcon = iconWithClassName(Menu);
 export const PackageIcon = iconWithClassName(Package);
 export const PencilIcon = iconWithClassName(Pencil);

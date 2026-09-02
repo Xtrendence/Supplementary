@@ -8,19 +8,30 @@ import {
   ChevronRightIcon,
   CopyIcon,
 } from "@/components/ui/lib/icons";
-import { useWeightUnit } from "@/lib/preferences";
+import { PainEditorSheet } from "@/components/PainEditorSheet";
+import { useTheme, useWeightUnit } from "@/lib/preferences";
+import { hsl, painColor } from "@/lib/themes";
 import { DAY_LABELS, dateKey } from "@/lib/supplements";
 import {
+  PAIN_MAX,
+  type PainEntry,
+  datesWithPain,
   datesWithSets,
-  fullDayLabel,
+  deletePainEntry,
   formatDayForClipboard,
+  formatPainTime,
   formatReps,
   formatSetWeight,
+  fullDayLabel,
   getMonths,
+  getPainMonths,
   groupByExercise,
   monthKey,
+  monthKeyOfDate,
   monthLabel,
+  painOnDate,
   setsOnDate,
+  updatePainEntry,
   useWorkoutSelector,
 } from "@/lib/workouts";
 
@@ -28,6 +39,7 @@ const WEEKDAY_INITIALS = DAY_LABELS.map((d) => d[0]);
 
 export function WorkoutCalendar() {
   const unit = useWeightUnit();
+  const theme = useTheme();
   const today = React.useMemo(() => new Date(), []);
   const todayKey = dateKey(today);
 
@@ -37,12 +49,21 @@ export function WorkoutCalendar() {
   });
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
+  const [editingPain, setEditingPain] = React.useState<PainEntry | null>(null);
 
   const months = useWorkoutSelector(() => getMonths());
+  const painMonths = useWorkoutSelector(() => getPainMonths());
   const viewKey = monthKey(new Date(view.year, view.month, 1));
   const dayKeys = useWorkoutSelector(() => datesWithSets(viewKey), [viewKey]);
+  const painDayKeys = useWorkoutSelector(
+    () => datesWithPain(viewKey),
+    [viewKey]
+  );
 
-  const earliestKey = months[0] ?? monthKey(today);
+  // Readings are tracked on rest days, so month navigation has to reach months
+  // that hold nothing but pain.
+  const allMonths = [...new Set([...months, ...painMonths])].sort();
+  const earliestKey = allMonths[0] ?? monthKey(today);
   const latestKey = monthKey(today);
   const canGoPrev = viewKey > earliestKey;
   const canGoNext = viewKey < latestKey;
@@ -50,6 +71,7 @@ export function WorkoutCalendar() {
   const shiftMonth = (delta: number) => {
     setSelectedKey(null);
     setCopied(false);
+    setEditingPain(null);
     setView((prev) => {
       const next = new Date(prev.year, prev.month + delta, 1);
       return { year: next.getFullYear(), month: next.getMonth() };
@@ -68,6 +90,10 @@ export function WorkoutCalendar() {
     () => (selectedKey ? groupByExercise(setsOnDate(selectedKey)) : []),
     [selectedKey]
   );
+  const pain = useWorkoutSelector(
+    () => (selectedKey ? painOnDate(selectedKey) : []),
+    [selectedKey]
+  );
 
   const handleCopy = async () => {
     if (!selectedKey) return;
@@ -76,12 +102,12 @@ export function WorkoutCalendar() {
     setTimeout(() => setCopied(false), 1800);
   };
 
-  if (months.length === 0) {
+  if (allMonths.length === 0) {
     return (
       <View className="rounded-2xl border border-border bg-card p-4">
         <Text variant="muted" className="text-xs leading-5">
-          No history yet. Record a set on the Workout tab and it will show up
-          here.
+          No history yet. Record a set on the Workout tab, or a pain level
+          above, and it will show up here.
         </Text>
       </View>
     );
@@ -135,6 +161,7 @@ export function WorkoutCalendar() {
           }
           const key = dateKey(new Date(view.year, view.month, day));
           const hasEntries = dayKeys.has(key);
+          const hasPain = painDayKeys.has(key);
           const isToday = key === todayKey;
           const isSelected = key === selectedKey;
           const isFuture = key > todayKey;
@@ -169,16 +196,28 @@ export function WorkoutCalendar() {
                 >
                   {day}
                 </Text>
-                <View
-                  className={cn(
-                    "mt-0.5 h-1 w-1 rounded-full",
-                    hasEntries
-                      ? isSelected
-                        ? "bg-primary-foreground"
-                        : "bg-primary"
-                      : "bg-transparent"
-                  )}
-                />
+                <View className="mt-0.5 flex-row" style={{ gap: 2 }}>
+                  <View
+                    className={cn(
+                      "h-1 w-1 rounded-full",
+                      hasEntries
+                        ? isSelected
+                          ? "bg-primary-foreground"
+                          : "bg-primary"
+                        : "bg-transparent"
+                    )}
+                  />
+                  <View
+                    className="h-1 w-1 rounded-full"
+                    style={{
+                      backgroundColor: hasPain
+                        ? isSelected
+                          ? hsl(theme.palette.primaryForeground)
+                          : "#f59e0b"
+                        : "transparent",
+                    }}
+                  />
+                </View>
               </Pressable>
             </View>
           );
@@ -191,7 +230,7 @@ export function WorkoutCalendar() {
             <Text variant="small" className="flex-1 pr-3 font-semibold">
               {fullDayLabel(selectedKey)}
             </Text>
-            {groups.length > 0 ? (
+            {groups.length > 0 || pain.length > 0 ? (
               <Pressable
                 onPress={handleCopy}
                 className="flex-row items-center gap-1.5 rounded-full border border-border px-3 py-1.5 active:bg-secondary"
@@ -211,11 +250,11 @@ export function WorkoutCalendar() {
             ) : null}
           </View>
 
-          {groups.length === 0 ? (
+          {groups.length === 0 && pain.length === 0 ? (
             <Text variant="muted" className="text-xs">
               Nothing recorded this day.
             </Text>
-          ) : (
+          ) : groups.length === 0 ? null : (
             <View className="gap-3">
               {groups.map((group) => (
                 <View key={group.exerciseId}>
@@ -244,12 +283,76 @@ export function WorkoutCalendar() {
               ))}
             </View>
           )}
+
+          {pain.length > 0 ? (
+            <View
+              className={cn(
+                "gap-1.5",
+                groups.length > 0 && "mt-3 border-t border-border pt-3"
+              )}
+            >
+              <Text variant="muted" className="text-xs uppercase tracking-widest">
+                Pain / irritation
+              </Text>
+              {pain.map((entry) => (
+                <Pressable
+                  key={entry.id}
+                  onPress={() => setEditingPain(entry)}
+                  className="flex-row items-center justify-between rounded-lg border border-border px-3 py-1.5 active:bg-secondary"
+                >
+                  <Text variant="muted" className="text-xs">
+                    {formatPainTime(entry)}
+                  </Text>
+                  {entry.note ? (
+                    <Text
+                      variant="muted"
+                      numberOfLines={1}
+                      className="flex-1 px-3 text-xs"
+                    >
+                      {entry.note}
+                    </Text>
+                  ) : null}
+                  <View className="flex-row items-baseline">
+                    <Text
+                      className="text-sm font-semibold"
+                      style={{ color: painColor(entry.level, theme) }}
+                    >
+                      {entry.level}
+                    </Text>
+                    <Text variant="muted" className="text-xs">
+                      /{PAIN_MAX}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : (
         <Text variant="muted" className="mt-2 px-1 text-xs">
           Tap a day to see what you trained.
         </Text>
       )}
+
+      <PainEditorSheet
+        entry={editingPain}
+        onClose={() => setEditingPain(null)}
+        onSave={(level, note) => {
+          if (!editingPain) return;
+          updatePainEntry(
+            editingPain.id,
+            monthKeyOfDate(editingPain.date),
+            level,
+            note
+          );
+          setEditingPain(null);
+        }}
+        onDelete={() => {
+          if (!editingPain) return;
+          deletePainEntry(editingPain.id, monthKeyOfDate(editingPain.date));
+          setEditingPain(null);
+        }}
+      />
     </View>
   );
 }

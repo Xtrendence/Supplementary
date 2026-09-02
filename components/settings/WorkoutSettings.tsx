@@ -3,17 +3,23 @@ import { Alert, Pressable, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import { Text, cn } from "@/components/ui";
+import { Input, Text, cn } from "@/components/ui";
 import {
   ChevronDownIcon,
   DumbbellIcon,
   FileJsonIcon,
+  LineChartIcon,
   FileSpreadsheetIcon,
   RefreshCwIcon,
   Trash2Icon,
   UploadIcon,
 } from "@/components/ui/lib/icons";
 import { WorkoutCalendar } from "@/components/WorkoutCalendar";
+import { PainSlider } from "@/components/PainSlider";
+import {
+  ProgressChartModal,
+  type ProgressChartTarget,
+} from "@/components/ProgressChartModal";
 import {
   ActionRow,
   Divider,
@@ -26,13 +32,17 @@ import {
   setThemeId,
   setWeightUnit,
   useSectionThemeId,
+  useTheme,
   useWeightUnit,
 } from "@/lib/preferences";
-import { THEMES } from "@/lib/themes";
+import { THEMES, painColor } from "@/lib/themes";
+import { dateKey } from "@/lib/supplements";
 import {
   EXPORT_RANGES,
   type ExportRange,
+  PAIN_MAX,
   WEIGHT_UNIT_OPTIONS,
+  addPainEntry,
   buildWorkoutCsv,
   buildWorkoutExport,
   clearAllWorkouts,
@@ -40,9 +50,12 @@ import {
   generateMockWorkouts,
   getExercises,
   getMonths,
+  getPainMonths,
   importWorkoutsFromCsv,
   importWorkoutsFromJson,
   lastSetFor,
+  painForRange,
+  painOnDate,
   recentMonthKeys,
   setsForRange,
   setsInMonths,
@@ -51,7 +64,11 @@ import {
 
 export function WorkoutSettings() {
   const unit = useWeightUnit();
+  const theme = useTheme();
   const activeThemeId = useSectionThemeId("workout");
+  const [painLevel, setPainLevel] = React.useState(0);
+  const [painNote, setPainNote] = React.useState("");
+  const [chart, setChart] = React.useState<ProgressChartTarget | null>(null);
 
   const [busy, setBusy] = React.useState<"export" | "import" | null>(null);
   const [dataOpen, setDataOpen] = React.useState(false);
@@ -66,6 +83,8 @@ export function WorkoutSettings() {
   const exercises = useWorkoutSelector(() => getExercises());
   const months = useWorkoutSelector(() => getMonths());
   const recentSets = useWorkoutSelector(() => setsInMonths(recentMonthKeys(2)));
+  const painToday = useWorkoutSelector(() => painOnDate(dateKey()));
+  const painMonths = useWorkoutSelector(() => getPainMonths());
 
   const breakdown = useWorkoutSelector(
     () =>
@@ -83,10 +102,11 @@ export function WorkoutSettings() {
   const handleExport = async (format: "json" | "csv") => {
     if (busy) return;
     const count = setsForRange(range).length;
-    if (count === 0) {
+    const painCount = painForRange(range).length;
+    if (count === 0 && painCount === 0) {
       Alert.alert(
         "Nothing to export",
-        "There are no sets recorded in the selected range."
+        "There are no sets or pain records in the selected range."
       );
       return;
     }
@@ -113,7 +133,10 @@ export function WorkoutSettings() {
               : "public.comma-separated-values-text",
         });
       } else {
-        Alert.alert("Saved", `${count} sets written to:\n${uri}`);
+        Alert.alert(
+          "Saved",
+          `${count} sets and ${painCount} pain records written to:\n${uri}`
+        );
       }
     } catch (error) {
       Alert.alert("Export failed", String(error));
@@ -169,6 +192,12 @@ export function WorkoutSettings() {
         outcome.exercisesAdded > 0
           ? `${outcome.exercisesAdded} new exercise${outcome.exercisesAdded === 1 ? "" : "s"}`
           : null,
+        outcome.painAdded > 0
+          ? `${outcome.painAdded} pain record${outcome.painAdded === 1 ? "" : "s"} added`
+          : null,
+        outcome.painSkipped > 0
+          ? `${outcome.painSkipped} pain already recorded`
+          : null,
       ].filter(Boolean);
       Alert.alert("Import complete", `${details.join(" · ")}.`);
     } catch (error) {
@@ -190,7 +219,7 @@ export function WorkoutSettings() {
             const result = generateMockWorkouts();
             Alert.alert(
               "Done",
-              `Generated ${result.sets} sets across ${result.exercises} exercises.`
+              `Generated ${result.sets} sets across ${result.exercises} exercises, plus ${result.pain} pain records.`
             );
           },
         },
@@ -199,13 +228,13 @@ export function WorkoutSettings() {
   };
 
   const handleClearAll = () => {
-    if (exercises.length === 0 && months.length === 0) {
+    if (exercises.length === 0 && months.length === 0 && painMonths.length === 0) {
       Alert.alert("Nothing to clear", "There is no workout data stored.");
       return;
     }
     Alert.alert(
       "Clear all workout data?",
-      "This permanently removes every exercise and set on this device.",
+      "This permanently removes every exercise, set and pain record on this device.",
       [
         { text: "Cancel", style: "cancel" },
         { text: "Clear all", style: "destructive", onPress: clearAllWorkouts },
@@ -311,6 +340,92 @@ export function WorkoutSettings() {
         </View>
       </SettingsCard>
 
+      <SectionLabel className="mt-6">Track Progress</SectionLabel>
+      <SettingsCard>
+        <View className="p-4">
+          <Text variant="muted" className="text-xs leading-5">
+            Twelve months of training, charted. Volume adds up across every
+            exercise; weight is shown as the average load per rep, since a bench
+            press and a curl can&apos;t be summed.
+          </Text>
+          <View className="mt-3 flex-row flex-wrap gap-2">
+            {CHART_BUTTONS.map((button) => (
+              <Pressable
+                key={button.title}
+                onPress={() => setChart(button)}
+                className="flex-row items-center gap-2 rounded-full border border-border bg-secondary px-4 py-2.5 active:opacity-80"
+              >
+                <LineChartIcon className="h-4 w-4 text-primary" />
+                <Text className="text-sm font-semibold text-foreground">
+                  {button.title}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </SettingsCard>
+
+      <SectionLabel className="mt-6">Track Injuries</SectionLabel>
+      <SettingsCard>
+        <View className="p-4">
+          <View className="flex-row items-end justify-between">
+            <View className="flex-1 pr-3">
+              <Text className="font-medium">Pain / irritation</Text>
+              <Text variant="muted" className="text-xs leading-5">
+                Rate how it feels right now. Record it on rest days too — that
+                is what shows which sessions leave a mark.
+              </Text>
+            </View>
+            <View className="flex-row items-baseline">
+              <Text
+                className="text-3xl font-semibold"
+                style={{ color: painColor(painLevel, theme) }}
+              >
+                {painLevel}
+              </Text>
+              <Text variant="muted" className="ml-1 text-xs">
+                / {PAIN_MAX}
+              </Text>
+            </View>
+          </View>
+
+          <View className="mt-2">
+            <PainSlider value={painLevel} onChange={setPainLevel} />
+          </View>
+
+          <View className="mt-3">
+            <Text variant="small" className="mb-2 text-muted-foreground">
+              Note (optional)
+            </Text>
+            <Input
+              value={painNote}
+              onChangeText={setPainNote}
+              placeholder="e.g. left knee, dull ache"
+              multiline
+              className="native:h-auto h-auto min-h-12 py-2"
+            />
+          </View>
+
+          <Pressable
+            onPress={() => {
+              addPainEntry(painLevel, { note: painNote });
+              // The level is a running state worth keeping; the note describes
+              // this one reading.
+              setPainNote("");
+            }}
+            className="mt-4 flex-row items-center justify-center gap-2 rounded-full bg-primary px-5 py-3 active:opacity-80"
+          >
+            <Text className="font-semibold text-primary-foreground">Record</Text>
+          </Pressable>
+
+          <Text variant="muted" className="mt-2 text-center text-xs">
+            {painToday.length === 0
+              ? "Nothing recorded today"
+              : `${painToday.length} recorded today · latest ${painToday[painToday.length - 1].level}/${PAIN_MAX}`}
+          </Text>
+        </View>
+      </SettingsCard>
+
       <SectionLabel className="mt-6">Themes</SectionLabel>
       <SettingsCard>
         <Pressable
@@ -354,7 +469,7 @@ export function WorkoutSettings() {
           <View className="flex-1">
             <Text className="font-medium">Export data</Text>
             <Text variant="muted" className="text-xs">
-              Choose a range, then export as JSON or CSV
+              Sets and pain records, as JSON or CSV
             </Text>
           </View>
           <ChevronDownIcon
@@ -491,6 +606,15 @@ export function WorkoutSettings() {
           </View>
         ) : null}
       </SettingsCard>
+
+      <ProgressChartModal target={chart} onClose={() => setChart(null)} />
     </View>
   );
 }
+
+const CHART_BUTTONS: ProgressChartTarget[] = [
+  { title: "Volume", metrics: ["volume"] },
+  { title: "Weight", metrics: ["weight"] },
+  { title: "Pain", metrics: ["pain"] },
+  { title: "Mixed", metrics: ["volume", "weight", "pain"] },
+];

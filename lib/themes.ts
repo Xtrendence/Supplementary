@@ -373,6 +373,24 @@ export const SET_MARKER_COLORS = {
   reps: "#38bdf8",
 } as const;
 
+/** Chart line colours. Fixed rather than derived from the theme: several
+ *  palettes have a primary that leaves almost no contrast between overlaid
+ *  lines — a grey primary makes two of them grey. Warm against cool so they
+ *  stay apart even as thin strokes. */
+export const CHART_COLORS = {
+  volume: "#38bdf8",
+  weight: "#f59e0b",
+  pain: "#f43f5e",
+} as const;
+
+/** Reading colour by severity, so a glance conveys how bad it was. */
+export function painColor(level: number, theme: Theme): string {
+  if (level <= 0) return hsl(theme.palette.mutedForeground);
+  if (level <= 3) return hsl(theme.palette.primary);
+  if (level <= 6) return "#f59e0b";
+  return hsl(theme.palette.destructive);
+}
+
 export function themeVars(theme: Theme) {
   const p = theme.palette;
   return vars({
