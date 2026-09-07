@@ -383,6 +383,10 @@ export const CHART_COLORS = {
   pain: "#f43f5e",
 } as const;
 
+/** The suggested-goal card. Distinct from every set marker and chart line so
+ *  it never reads as one of them. */
+export const GOAL_COLOR = "#10b981";
+
 /** Reading colour by severity, so a glance conveys how bad it was. */
 export function painColor(level: number, theme: Theme): string {
   if (level <= 0) return hsl(theme.palette.mutedForeground);

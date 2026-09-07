@@ -16,11 +16,14 @@ import { WorkoutSettings } from "@/components/settings/WorkoutSettings";
 import {
   type AppSection,
   SECTION_OPTIONS,
+  SETTINGS_DEFAULT_OPTIONS,
   setAutoUpdate,
   setActiveSection,
   setDefaultSection,
+  setDefaultSettingsSection,
   useAutoUpdate,
   useDefaultSection,
+  useDefaultSettingsSection,
 } from "@/lib/preferences";
 import {
   type UpdateInfo,
@@ -33,8 +36,17 @@ export default function Settings() {
   // Settings opens neutral: pick a section to see the settings that belong to
   // it. Everything except this switcher, the default-section choice and
   // updates is scoped to one section.
-  const [selected, setSelected] = React.useState<AppSection | null>(null);
+  const defaultSettingsSection = useDefaultSettingsSection();
+  const [selected, setSelected] = React.useState<AppSection | null>(
+    defaultSettingsSection === "none" ? null : defaultSettingsSection
+  );
   const defaultSection = useDefaultSection();
+
+  // Applies at launch and again whenever the preference itself changes, so the
+  // choice is visible immediately rather than only on the next start.
+  React.useEffect(() => {
+    setSelected(defaultSettingsSection === "none" ? null : defaultSettingsSection);
+  }, [defaultSettingsSection]);
   const autoUpdate = useAutoUpdate();
 
   const [update, setUpdate] = React.useState<{
@@ -153,6 +165,23 @@ export default function Settings() {
               options={SECTION_OPTIONS}
               value={defaultSection}
               onChange={setDefaultSection}
+            />
+          </View>
+
+          <Divider />
+
+          <View className="p-4">
+            <View className="flex-1 pr-3">
+              <Text className="font-medium">Settings opens on</Text>
+              <Text variant="muted" className="text-xs leading-5">
+                Which section&apos;s settings are showing when you come here.
+              </Text>
+            </View>
+            <Segmented
+              className="mt-3 self-start"
+              options={SETTINGS_DEFAULT_OPTIONS}
+              value={defaultSettingsSection}
+              onChange={setDefaultSettingsSection}
             />
           </View>
         </SettingsCard>

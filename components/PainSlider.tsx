@@ -20,9 +20,16 @@ const ROW = 44;
 export function PainSlider({
   value,
   onChange,
+  /** Overrides the severity colouring, for scales that aren't pain levels. */
+  color: colorOverride,
+  minLabel = "0 · none",
+  maxLabel = `${PAIN_MAX} · worst`,
 }: {
   value: number;
   onChange: (value: number) => void;
+  color?: string;
+  minLabel?: string;
+  maxLabel?: string;
 }) {
   const theme = useTheme();
   const widthRef = React.useRef(0);
@@ -50,7 +57,7 @@ export function PainSlider({
   }
 
   const [width, setWidth] = React.useState(0);
-  const color = painColor(value, theme);
+  const color = colorOverride ?? painColor(value, theme);
   const fraction = value / PAIN_MAX;
   const thumbOffset = Math.max(0, (width - THUMB) * fraction);
 
@@ -105,10 +112,10 @@ export function PainSlider({
 
       <View className="flex-row items-center justify-between">
         <Text variant="muted" className="text-xs">
-          0 · none
+          {minLabel}
         </Text>
         <Text variant="muted" className="text-xs">
-          {PAIN_MAX} · worst
+          {maxLabel}
         </Text>
       </View>
     </View>

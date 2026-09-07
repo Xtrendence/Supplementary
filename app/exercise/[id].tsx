@@ -10,10 +10,18 @@ import {
   TimerIcon,
 } from "@/components/ui/lib/icons";
 import { ExerciseSheet } from "@/components/ExerciseSheet";
+import { GoalCard } from "@/components/GoalCard";
 import { SetEditorSheet } from "@/components/SetEditorSheet";
 import { SpeedBars, SpeedSelector } from "@/components/SpeedSelector";
 import { useSecondTick } from "@/hooks/useSecondTick";
-import { useTheme, useWeightUnit } from "@/lib/preferences";
+import {
+  useAvailableWeights,
+  usePainSensitivity,
+  useShowGoals,
+  useTheme,
+  useWeightUnit,
+} from "@/lib/preferences";
+import { calculateGoal } from "@/lib/goals";
 import { SET_MARKER_COLORS, hsl, hslShifted } from "@/lib/themes";
 import { dateKey } from "@/lib/supplements";
 import {
@@ -61,6 +69,17 @@ export default function ExerciseDetail() {
   );
   const groups = React.useMemo(() => groupByDate(sets), [sets]);
   const highlights = React.useMemo(() => highlightSets(sets), [sets]);
+
+  const showGoals = useShowGoals();
+  const availableWeights = useAvailableWeights(unit);
+  const painSensitivity = usePainSensitivity();
+  const goal = useWorkoutSelector(
+    () =>
+      showGoals && id
+        ? calculateGoal({ exerciseId: id, unit, availableWeights, painSensitivity })
+        : null,
+    [id, unit, showGoals, availableWeights, painSensitivity]
+  );
 
   const [reps, setReps] = React.useState("");
   const [weight, setWeight] = React.useState("");
@@ -209,6 +228,7 @@ export default function ExerciseDetail() {
           </View>
         ) : (
           <>
+            {goal ? <GoalCard goal={goal} /> : null}
             <Legend />
             {groups.map((group) => (
               <View key={group.date} className="mb-5">

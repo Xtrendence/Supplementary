@@ -25,6 +25,7 @@ import {
   RefreshCw,
   RotateCcw,
   Settings,
+  Target,
   Timer,
   Trash2,
   Upload,
@@ -60,6 +61,7 @@ export const PlusIcon = iconWithClassName(Plus);
 export const RefreshCwIcon = iconWithClassName(RefreshCw);
 export const RotateCcwIcon = iconWithClassName(RotateCcw);
 export const SettingsIcon = iconWithClassName(Settings);
+export const TargetIcon = iconWithClassName(Target);
 export const TimerIcon = iconWithClassName(Timer);
 export const Trash2Icon = iconWithClassName(Trash2);
 export const UploadIcon = iconWithClassName(Upload);

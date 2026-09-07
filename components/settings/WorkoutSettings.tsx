@@ -3,7 +3,7 @@ import { Alert, Pressable, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
-import { Input, Text, cn } from "@/components/ui";
+import { Input, Switch, Text, cn } from "@/components/ui";
 import {
   ChevronDownIcon,
   DumbbellIcon,
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/lib/icons";
 import { WorkoutCalendar } from "@/components/WorkoutCalendar";
 import { PainSlider } from "@/components/PainSlider";
+import { WeightPicker } from "@/components/settings/WeightPicker";
 import {
   ProgressChartModal,
   type ProgressChartTarget,
@@ -29,13 +30,18 @@ import {
   ThemePicker,
 } from "@/components/settings/SettingsPrimitives";
 import {
+  setPainSensitivity,
+  setShowGoals,
   setThemeId,
   setWeightUnit,
+  usePainSensitivity,
+  useShowGoals,
   useSectionThemeId,
   useTheme,
   useWeightUnit,
 } from "@/lib/preferences";
-import { THEMES, painColor } from "@/lib/themes";
+import { GOAL_COLOR, THEMES, painColor } from "@/lib/themes";
+import { MAX_PAIN_SENSITIVITY, painThresholds } from "@/lib/goals";
 import { dateKey } from "@/lib/supplements";
 import {
   EXPORT_RANGES,
@@ -68,6 +74,9 @@ export function WorkoutSettings() {
   const activeThemeId = useSectionThemeId("workout");
   const [painLevel, setPainLevel] = React.useState(0);
   const [painNote, setPainNote] = React.useState("");
+  const showGoals = useShowGoals();
+  const painSensitivity = usePainSensitivity();
+  const thresholds = painThresholds(painSensitivity);
   const [chart, setChart] = React.useState<ProgressChartTarget | null>(null);
 
   const [busy, setBusy] = React.useState<"export" | "import" | null>(null);
@@ -363,6 +372,62 @@ export function WorkoutSettings() {
             ))}
           </View>
         </View>
+      </SettingsCard>
+
+      <SectionLabel className="mt-6">Goals</SectionLabel>
+      <SettingsCard>
+        <View className="flex-row items-center justify-between p-4">
+          <View className="flex-1 pr-3">
+            <Text className="font-medium">Show Calculated Goals</Text>
+            <Text variant="muted" className="text-xs leading-5">
+              Puts a suggested next set at the top of each exercise, worked out
+              from your recent sets, their speed and your pain records.
+            </Text>
+          </View>
+          <Switch checked={showGoals} onCheckedChange={setShowGoals} />
+        </View>
+
+        <Divider />
+
+        <View className="px-4 pb-2 pt-4">
+          <View className="flex-row items-start justify-between">
+            <View className="flex-1 pr-3">
+              <Text className="font-medium">How much pain counts</Text>
+              <Text variant="muted" className="text-xs leading-5">
+                {thresholds
+                  ? `Reps only at ${thresholds.caution}/${PAIN_MAX} · hold at ${thresholds.backOff} · back off at ${thresholds.stop}`
+                  : "Pain is ignored when working out goals."}
+              </Text>
+            </View>
+            <Text
+              className="text-2xl font-semibold"
+              style={{ color: GOAL_COLOR }}
+            >
+              {painSensitivity}
+            </Text>
+          </View>
+          <View className="mt-1">
+            <PainSlider
+              value={painSensitivity}
+              onChange={setPainSensitivity}
+              color={GOAL_COLOR}
+              minLabel="0 · ignore pain"
+              maxLabel={`${MAX_PAIN_SENSITIVITY} · most cautious`}
+            />
+          </View>
+        </View>
+
+        <Divider />
+
+        <View className="px-4 pb-1 pt-4">
+          <Text className="font-medium">Weights you have</Text>
+          <Text variant="muted" className="text-xs leading-5">
+            Tap everything you can load. Goals only ever suggest a weight from
+            this list, so you won&apos;t be told to lift a 9 {unit} you
+            don&apos;t own.
+          </Text>
+        </View>
+        <WeightPicker unit={unit} />
       </SettingsCard>
 
       <SectionLabel className="mt-6">Track Injuries</SectionLabel>

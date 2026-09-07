@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { storage } from "./storage";
 import { DEFAULT_THEME_ID, getThemeById, THEMES, type Theme } from "./themes";
+import { DEFAULT_PAIN_SENSITIVITY } from "./goals";
 import type { WeightUnit } from "./workouts";
 
 /** The app is split into two independent trackers. Almost every preference
@@ -108,6 +109,192 @@ export function setDefaultSection(section: AppSection): void {
   defaultSectionCache = section;
   storage.set(DEFAULT_SECTION_KEY, section);
   for (const listener of defaultSectionListeners) listener();
+}
+
+/** Which section's settings are shown when the Settings tab opens. "none"
+ *  leaves it on the neutral switcher, which is the original behaviour. */
+export type SettingsDefault = AppSection | "none";
+
+export const SETTINGS_DEFAULT_OPTIONS: {
+	value: SettingsDefault;
+	label: string;
+}[] = [
+	{ value: "none", label: "Neither" },
+	{ value: "supplements", label: "Supplements" },
+	{ value: "workout", label: "Workout" },
+];
+
+const SETTINGS_DEFAULT_KEY = "defaultSettingsSection";
+const settingsDefaultListeners = new Set<() => void>();
+let settingsDefaultCache: SettingsDefault | null = null;
+
+function readSettingsDefault(): SettingsDefault {
+	const value = storage.getString(SETTINGS_DEFAULT_KEY);
+	return value === "supplements" || value === "workout" ? value : "none";
+}
+
+function getSettingsDefaultSnapshot(): SettingsDefault {
+	if (settingsDefaultCache === null) {
+		settingsDefaultCache = readSettingsDefault();
+	}
+	return settingsDefaultCache;
+}
+
+function subscribeSettingsDefault(listener: () => void): () => void {
+	settingsDefaultListeners.add(listener);
+	return () => {
+		settingsDefaultListeners.delete(listener);
+	};
+}
+
+export function useDefaultSettingsSection(): SettingsDefault {
+	return useSyncExternalStore(
+		subscribeSettingsDefault,
+		getSettingsDefaultSnapshot,
+		getSettingsDefaultSnapshot,
+	);
+}
+
+export function setDefaultSettingsSection(value: SettingsDefault): void {
+	settingsDefaultCache = value;
+	storage.set(SETTINGS_DEFAULT_KEY, value);
+	for (const listener of settingsDefaultListeners) listener();
+}
+
+const SHOW_GOALS_KEY = "showGoals";
+const showGoalsListeners = new Set<() => void>();
+let showGoalsCache: boolean | null = null;
+
+function getShowGoalsSnapshot(): boolean {
+	if (showGoalsCache === null) {
+		showGoalsCache = storage.getBoolean(SHOW_GOALS_KEY) ?? false;
+	}
+	return showGoalsCache;
+}
+
+function subscribeShowGoals(listener: () => void): () => void {
+	showGoalsListeners.add(listener);
+	return () => {
+		showGoalsListeners.delete(listener);
+	};
+}
+
+export function useShowGoals(): boolean {
+	return useSyncExternalStore(
+		subscribeShowGoals,
+		getShowGoalsSnapshot,
+		getShowGoalsSnapshot,
+	);
+}
+
+export function setShowGoals(value: boolean): void {
+	showGoalsCache = value;
+	storage.set(SHOW_GOALS_KEY, value);
+	for (const listener of showGoalsListeners) listener();
+}
+
+const PAIN_SENSITIVITY_KEY = "painSensitivity";
+const painSensitivityListeners = new Set<() => void>();
+let painSensitivityCache: number | null = null;
+
+function getPainSensitivitySnapshot(): number {
+	if (painSensitivityCache === null) {
+		const raw = storage.getString(PAIN_SENSITIVITY_KEY);
+		const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+		painSensitivityCache = Number.isFinite(parsed)
+			? Math.min(10, Math.max(0, parsed))
+			: DEFAULT_PAIN_SENSITIVITY;
+	}
+	return painSensitivityCache;
+}
+
+function subscribePainSensitivity(listener: () => void): () => void {
+	painSensitivityListeners.add(listener);
+	return () => {
+		painSensitivityListeners.delete(listener);
+	};
+}
+
+/** How strongly pain readings steer the suggested goal. */
+export function usePainSensitivity(): number {
+	return useSyncExternalStore(
+		subscribePainSensitivity,
+		getPainSensitivitySnapshot,
+		getPainSensitivitySnapshot,
+	);
+}
+
+export function setPainSensitivity(value: number): void {
+	painSensitivityCache = Math.min(10, Math.max(0, Math.round(value)));
+	storage.set(PAIN_SENSITIVITY_KEY, String(painSensitivityCache));
+	for (const listener of painSensitivityListeners) listener();
+}
+
+/** The equipment you actually own, so a suggested weight is one you can load.
+ *  Held per unit rather than converted: someone with 5/10/15 lb dumbbells
+ *  shouldn't be shown a 2.2 lb option, and vice versa. */
+export const MAX_AVAILABLE_WEIGHT = 50;
+
+const weightsListeners = new Set<() => void>();
+const weightsCache: Partial<Record<WeightUnit, number[]>> = {};
+const weightsKey = (unit: WeightUnit) => `availableWeights:${unit}`;
+
+export function getAvailableWeights(unit: WeightUnit): number[] {
+	const cached = weightsCache[unit];
+	if (cached) return cached;
+	let parsed: number[] = [];
+	try {
+		const raw = storage.getString(weightsKey(unit));
+		const list = raw ? JSON.parse(raw) : [];
+		if (Array.isArray(list)) {
+			parsed = [
+				...new Set(
+					list.filter(
+						(n): n is number =>
+							typeof n === "number" &&
+							Number.isInteger(n) &&
+							n >= 1 &&
+							n <= MAX_AVAILABLE_WEIGHT,
+					),
+				),
+			].sort((a, b) => a - b);
+		}
+	} catch {
+		parsed = [];
+	}
+	weightsCache[unit] = parsed;
+	return parsed;
+}
+
+function subscribeWeights(listener: () => void): () => void {
+	weightsListeners.add(listener);
+	return () => {
+		weightsListeners.delete(listener);
+	};
+}
+
+export function useAvailableWeights(unit: WeightUnit): number[] {
+	return useSyncExternalStore(
+		subscribeWeights,
+		() => getAvailableWeights(unit),
+		() => getAvailableWeights(unit),
+	);
+}
+
+export function toggleAvailableWeight(unit: WeightUnit, value: number): void {
+	const current = getAvailableWeights(unit);
+	const next = current.includes(value)
+		? current.filter((n) => n !== value)
+		: [...current, value].sort((a, b) => a - b);
+	weightsCache[unit] = next;
+	storage.set(weightsKey(unit), JSON.stringify(next));
+	for (const listener of weightsListeners) listener();
+}
+
+export function clearAvailableWeights(unit: WeightUnit): void {
+	weightsCache[unit] = [];
+	storage.set(weightsKey(unit), JSON.stringify([]));
+	for (const listener of weightsListeners) listener();
 }
 
 const sectionListeners = new Set<() => void>();
