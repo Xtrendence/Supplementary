@@ -1,97 +1,131 @@
 import { dateFromKey, dateKey } from "./supplements";
 import {
   PAIN_MAX,
-  type SetSpeed,
   type WeightUnit,
   type WorkoutSet,
   getPainEntries,
   getPainMonths,
-  monthKeyOfDate,
   recentMonthKeys,
   roundWeight,
   setsInMonths,
   weightIn,
 } from "./workouts";
 
-/** How far back to look. Long enough to see a trend, short enough that a
- *  layoff doesn't anchor the suggestion to old form. */
-const WINDOW_DAYS = 42;
-/** Sessions considered when deciding whether progress has stalled. */
-const SESSIONS_CONSIDERED = 5;
-/** Rep target when there's no history to infer one from. */
-const FALLBACK_REP_CEILING = 15;
-const REP_CEILING_BOUNDS = { min: 10, max: 30 };
-/** Never suggest fewer reps than this after a weight step. */
-const MIN_REPS_AFTER_STEP = 5;
+/** Long enough to see whether a weight has actually been established, short
+ *  enough that half-forgotten form doesn't anchor the suggestion. */
+const WINDOW_DAYS = 56;
+const SESSIONS_CONSIDERED = 8;
+/** Sessions at a weight before it counts as yours rather than a trial. */
+const SESSIONS_TO_ESTABLISH = 2;
+/** Sessions at a weight before it may be stepped up from. Establishing a
+ *  weight and having earned the right to leave it are different bars. */
+const SESSIONS_TO_PROGRESS = 3;
+/** Only recent sessions can establish a weight. Without this, a weight you
+ *  deliberately deloaded away from weeks ago would still read as your working
+ *  weight, and every suggestion would be anchored above where you are. */
+const ESTABLISH_LOOKBACK = 4;
+/** The rep range spans this fraction of your best at the weight. */
+const RANGE_FLOOR_RATIO = 0.65;
+const MIN_RANGE_SPAN = 2;
+const FALLBACK_TOP_REPS = 12;
 /** Days after a session in which pain is treated as caused by it. */
 const PAIN_LAG_DAYS = 2;
-/** A reading this recent counts on its own, not just in the average — a spike
- *  shouldn't be diluted by a fortnight of good days. */
+/** A reading this recent counts on its own, not only in an average. */
 const PAIN_RECENT_DAYS = 3;
-/** Used only when neither the equipment list nor the history offers a step. */
+/** How far above your resting level counts as a warning, even when the
+ *  absolute number still looks tolerable. Scales with sensitivity: at the
+ *  default of 6 a rise of 2 matters, at 10 a single point does. */
+function painRiseLimit(sensitivity: number): number {
+  return Math.max(1, 4 - Math.round(sensitivity / 3));
+}
+const LAYOFF_MIN_DAYS = 14;
+const LAYOFF_GAP_MULTIPLE = 2.5;
 const DEFAULT_STEP = { kg: 2.5, lbs: 5 };
 
 export const DEFAULT_PAIN_SENSITIVITY = 6;
 export const MAX_PAIN_SENSITIVITY = 10;
 
 export interface PainThresholds {
-	/** Stop adding weight; reps only. */
-	caution: number;
-	/** Stop progressing at all. */
-	backOff: number;
-	/** Drop the weight and let it settle. */
-	stop: number;
+  /** Stop adding weight; work the same range. */
+  caution: number;
+  /** Stop progressing; less work, not more. */
+  backOff: number;
+  /** Don't train this today. */
+  stop: number;
 }
 
 /** Higher sensitivity lowers the bar at which pain starts steering the
  *  suggestion; 0 ignores pain entirely. The default of 6 puts the bands at
- *  3 / 4 / 5, which suits a dull ache that's worth respecting long before it
- *  turns into a flare-up. A sharper, more occasional pain wants a lower
- *  setting. */
+ *  3 / 4 / 5, which suits a dull ache worth respecting long before it turns
+ *  into a flare-up. */
 export function painThresholds(sensitivity: number): PainThresholds | null {
-	if (sensitivity <= 0) return null;
-	const caution = Math.min(8, Math.max(1, 9 - Math.round(sensitivity)));
-	return { caution, backOff: caution + 1, stop: caution + 2 };
+  if (sensitivity <= 0) return null;
+  const caution = Math.min(8, Math.max(1, 9 - Math.round(sensitivity)));
+  return { caution, backOff: caution + 1, stop: caution + 2 };
 }
 
 export type GoalKind =
   | "baseline"
-  | "progress-reps"
-  | "progress-weight"
+  | "build"
+  | "step-up"
+  | "consolidate"
   | "hold"
-  | "deload";
+  | "reduce"
+  | "regress"
+  | "ease-back"
+  | "rest";
 
 export interface Goal {
   kind: GoalKind;
-  /** In the display unit. */
-  weight: number;
-  reps: number;
-  /** One line explaining why, so the number isn't mysterious. */
+  /** In the display unit. Absent when the suggestion is not to train. */
+  weight?: number;
+  /** The target is a range, not a single number — sets naturally descend, and
+   *  a range is what tells you when the weight has become too light. */
+  repsLow?: number;
+  repsHigh?: number;
+  /** Sets to aim for, when it's worth saying. */
+  sets?: number;
   reason: string;
   unit: WeightUnit;
 }
 
 interface Session {
   date: string;
+  /** Time of the last set, for pain ordering. */
+  at: number;
   sets: WorkoutSet[];
-  /** Heaviest set, ties broken by reps. */
-  top: WorkoutSet;
+  /** The weight most of the session's sets were done at, ties going heavier. */
+  primaryWeight: number;
+  maxWeight: number;
 }
 
-/** Epley: a rough one-rep-max, used only to carry effort across a weight step
- *  so the rep target drops by a sensible amount rather than a guessed one. */
-function oneRepMax(weight: number, reps: number): number {
-  return weight * (1 + reps / 30);
-}
-
-function repsForSameEffort(target: number, weight: number): number {
-  return Math.round(((target / weight - 1) * 30 * 10) / 10);
+interface RepRange {
+  low: number;
+  high: number;
 }
 
 function sameWeight(a: number, b: number): boolean {
   return Math.abs(a - b) < 0.01;
 }
 
+function oneRepMax(weight: number, reps: number): number {
+  return weight * (1 + reps / 30);
+}
+
+function repsForSameEffort(target: number, weight: number): number {
+  return Math.round((target / weight - 1) * 30);
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+/** Newest first. */
 function buildSessions(
   exerciseId: string,
   unit: WeightUnit,
@@ -114,32 +148,178 @@ function buildSessions(
 
   return [...byDate.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-    .map(([date, group]) => ({
-      date,
-      sets: group,
-      top: group.reduce((best, set) =>
-        weightIn(set, unit) > weightIn(best, unit) ||
-        (sameWeight(weightIn(set, unit), weightIn(best, unit)) &&
-          set.reps > best.reps)
-          ? set
-          : best
-      ),
-    }));
+    .map(([date, group]) => {
+      const counts = new Map<number, number>();
+      for (const set of group) {
+        const weight = roundWeight(weightIn(set, unit));
+        counts.set(weight, (counts.get(weight) ?? 0) + 1);
+      }
+      let primaryWeight = 0;
+      let bestCount = 0;
+      for (const [weight, count] of counts) {
+        if (count > bestCount || (count === bestCount && weight > primaryWeight)) {
+          primaryWeight = weight;
+          bestCount = count;
+        }
+      }
+      return {
+        date,
+        at: group.reduce((max, set) => Math.max(max, set.at), 0),
+        sets: group,
+        primaryWeight,
+        maxWeight: group.reduce(
+          (max, set) => Math.max(max, roundWeight(weightIn(set, unit))),
+          0
+        ),
+      };
+    })
+    .slice(0, SESSIONS_CONSIDERED);
 }
 
-/** Worst reading on each of the days following recent sessions, averaged.
- *  Soreness shows up a day or two later, so same-day readings alone would miss
- *  what a session actually cost. */
+function setsAt(session: Session, unit: WeightUnit, weight: number): WorkoutSet[] {
+  return session.sets.filter((set) =>
+    sameWeight(roundWeight(weightIn(set, unit)), weight)
+  );
+}
+
+/** The weight you've actually settled at: the heaviest that has been a
+ *  session's main weight often enough to count. A single heavier set is a
+ *  trial, not a new working weight — which is the whole point. */
+function establishedWeight(sessions: Session[]): number {
+  const recent = sessions.slice(0, ESTABLISH_LOOKBACK);
+  const primaryCounts = new Map<number, number>();
+  for (const session of recent) {
+    primaryCounts.set(
+      session.primaryWeight,
+      (primaryCounts.get(session.primaryWeight) ?? 0) + 1
+    );
+  }
+
+  // What you're on now, if you've been on it long enough to count.
+  const current = recent[0].primaryWeight;
+  if ((primaryCounts.get(current) ?? 0) >= SESSIONS_TO_ESTABLISH) return current;
+
+  // Otherwise whatever you've spent the most sessions on, and when that's a
+  // tie the lighter one — a heavier weight has to earn its place.
+  let best = current;
+  let bestCount = 0;
+  for (const [weight, count] of primaryCounts) {
+    if (count > bestCount || (count === bestCount && weight < best)) {
+      best = weight;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+/** Anything heavier than the working weight that hasn't earned its place yet. */
+function findProbe(
+  sessions: Session[],
+  unit: WeightUnit,
+  working: number
+): { weight: number; session: Session } | null {
+  for (const session of sessions.slice(0, 2)) {
+    if (session.maxWeight > working + 0.01) {
+      return { weight: session.maxWeight, session };
+    }
+  }
+  return null;
+}
+
+/** Aim for every set to reach the top of the range; the top is your best at
+ *  this weight, so the bar rises with you rather than sitting at a constant. */
+/** Reps to expect at a heavier weight, carrying the same effort across. */
+function carriedReps(from: number, reps: number, to: number): number {
+  const epley = repsForSameEffort(oneRepMax(from, reps), to);
+  const step = from > 0 ? (to - from) / from : 1;
+  if (step <= 0 || step > 0.35) return epley;
+  // Empirically a modest jump costs less than Epley suggests once the sets run
+  // long: ~20% more weight takes roughly a third off the reps, not two thirds.
+  const ratio = Math.min(0.75, Math.max(0.45, 1 - 1.6 * step));
+  return Math.max(epley, Math.round(reps * ratio));
+}
+
+function repRangeAt(
+  sessions: Session[],
+  unit: WeightUnit,
+  weight: number
+): RepRange {
+  // Whatever you were managing at the weight below, carried across by effort:
+  // a stable bar to clear that doesn't move every time you have a good day.
+  let lighter = 0;
+  let lighterBest = 0;
+  for (const session of sessions) {
+    for (const set of session.sets) {
+      const w = roundWeight(weightIn(set, unit));
+      if (w < weight - 0.01 && w > lighter) {
+        lighter = w;
+        lighterBest = 0;
+      }
+      if (sameWeight(w, lighter)) lighterBest = Math.max(lighterBest, set.reps);
+    }
+  }
+
+  let top = 0;
+  if (lighter > 0 && lighterBest > 0 && weight > 0) {
+    top = carriedReps(lighter, lighterBest, weight);
+  }
+  if (top < 3) {
+    // No lighter weight to inherit from, so the bar is your own best here and
+    // holding it for consecutive sessions is what proves it.
+    top = 0;
+    for (const session of sessions) {
+      for (const set of setsAt(session, unit, weight)) {
+        top = Math.max(top, set.reps);
+      }
+    }
+    if (top === 0) {
+      for (const session of sessions) {
+        for (const set of session.sets) top = Math.max(top, set.reps);
+      }
+      top = top || FALLBACK_TOP_REPS;
+    }
+  }
+  const low = Math.max(3, Math.round(top * RANGE_FLOOR_RATIO));
+  return { low, high: Math.max(low + MIN_RANGE_SPAN, top) };
+}
+
+function sessionsAtWeight(
+  sessions: Session[],
+  unit: WeightUnit,
+  weight: number
+): Session[] {
+  return sessions.filter((session) => setsAt(session, unit, weight).length > 0);
+}
+
+/** Best set of each session at a weight, oldest first. */
+function repTrend(
+  sessions: Session[],
+  unit: WeightUnit,
+  weight: number
+): number[] {
+  return sessionsAtWeight(sessions, unit, weight)
+    .slice(0, 4)
+    .reverse()
+    .map((session) =>
+      setsAt(session, unit, weight).reduce(
+        (max, set) => Math.max(max, set.reps),
+        0
+      )
+    );
+}
+
 interface PainSignal {
-	/** Mean of the worst readings in the days following recent sessions. */
-	average: number;
-	/** Worst reading in the last few days, whenever it happened. */
-	recent: number;
-	/** Whichever of the two is higher — what the thresholds are tested on. */
-	effective: number;
+  /** Mean worst reading in the days following recent sessions. */
+  after: number | null;
+  /** Mean worst reading on days not shadowed by a session — your resting level. */
+  resting: number | null;
+  /** Worst reading in the last few days. */
+  now: number;
+  /** How far training is pushing you above resting. */
+  rise: number;
 }
 
-function painAfterSessions(sessions: Session[], now: Date): PainSignal | null {
+function readPain(sessions: Session[], now: Date): PainSignal | null {
   const worstByDate = new Map<string, number>();
   for (const month of getPainMonths()) {
     for (const entry of getPainEntries(month)) {
@@ -151,16 +331,26 @@ function painAfterSessions(sessions: Session[], now: Date): PainSignal | null {
   }
   if (worstByDate.size === 0) return null;
 
-  const readings: number[] = [];
+  const shadowed = new Set<string>();
   for (const session of sessions) {
     const start = dateFromKey(session.date);
     for (let offset = 0; offset <= PAIN_LAG_DAYS; offset++) {
       const day = new Date(start);
       day.setDate(day.getDate() + offset);
-      if (day > now) break;
-      const level = worstByDate.get(dateKey(day));
-      if (level !== undefined) readings.push(level);
+      shadowed.add(dateKey(day));
     }
+  }
+
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - WINDOW_DAYS);
+  const from = dateKey(cutoff);
+
+  const afterReadings: number[] = [];
+  const restingReadings: number[] = [];
+  for (const [date, level] of worstByDate) {
+    if (date < from || date > dateKey(now)) continue;
+    if (shadowed.has(date)) afterReadings.push(level);
+    else restingReadings.push(level);
   }
 
   let recent = 0;
@@ -170,50 +360,22 @@ function painAfterSessions(sessions: Session[], now: Date): PainSignal | null {
     recent = Math.max(recent, worstByDate.get(dateKey(day)) ?? 0);
   }
 
-  if (readings.length === 0 && recent === 0) return null;
-  const average =
-    readings.length > 0
-      ? readings.reduce((sum, n) => sum + n, 0) / readings.length
-      : 0;
-  return { average, recent, effective: Math.max(average, recent) };
+  const mean = (values: number[]) =>
+    values.length === 0
+      ? null
+      : values.reduce((sum, n) => sum + n, 0) / values.length;
+  const after = mean(afterReadings);
+  const resting = mean(restingReadings);
+
+  return {
+    after,
+    resting,
+    now: recent,
+    rise: after !== null && resting !== null ? after - resting : 0,
+  };
 }
 
-/** The rep count to reach before adding weight. Inferred from the last time
- *  they stepped up: whatever they were managing at the previous weight is the
- *  bar to clear at this one. */
-function repCeilingFor(
-  sessions: Session[],
-  unit: WeightUnit,
-  current: number
-): number {
-  let previousWeight = 0;
-  for (const session of sessions) {
-    for (const set of session.sets) {
-      const weight = weightIn(set, unit);
-      if (weight < current - 0.01 && weight > previousWeight) {
-        previousWeight = weight;
-      }
-    }
-  }
-  if (previousWeight === 0) return FALLBACK_REP_CEILING;
-
-  let bestAtPrevious = 0;
-  for (const session of sessions) {
-    for (const set of session.sets) {
-      if (sameWeight(weightIn(set, unit), previousWeight)) {
-        bestAtPrevious = Math.max(bestAtPrevious, set.reps);
-      }
-    }
-  }
-  return Math.min(
-    REP_CEILING_BOUNDS.max,
-    Math.max(REP_CEILING_BOUNDS.min, bestAtPrevious || FALLBACK_REP_CEILING)
-  );
-}
-
-/** Next loadable weight up. Prefers the equipment list, falls back to the
- *  smallest step the history shows, then to a plate-sized default. */
-function stepUp(
+function nextWeightUp(
   current: number,
   available: number[],
   sessions: Session[],
@@ -221,25 +383,39 @@ function stepUp(
 ): number | null {
   const higher = available.filter((w) => w > current + 0.01);
   if (higher.length > 0) return Math.min(...higher);
-  if (available.length > 0) return null; // at the top of what they own
+  if (available.length > 0) return null;
 
   const weights = [
     ...new Set(
-      sessions.flatMap((s) => s.sets.map((set) => roundWeight(weightIn(set, unit))))
+      sessions.flatMap((s) =>
+        s.sets.map((set) => roundWeight(weightIn(set, unit)))
+      )
     ),
   ].sort((a, b) => a - b);
-  let smallestGap = Number.POSITIVE_INFINITY;
+  let smallest = Number.POSITIVE_INFINITY;
   for (let i = 1; i < weights.length; i++) {
     const gap = weights[i] - weights[i - 1];
-    if (gap > 0.01) smallestGap = Math.min(smallestGap, gap);
+    if (gap > 0.01) smallest = Math.min(smallest, gap);
   }
-  const step = Number.isFinite(smallestGap) ? smallestGap : DEFAULT_STEP[unit];
+  const step = Number.isFinite(smallest) ? smallest : DEFAULT_STEP[unit];
   return roundWeight(current + step);
 }
 
-function stepDown(current: number, available: number[]): number | null {
+function nextWeightDown(current: number, available: number[]): number | null {
   const lower = available.filter((w) => w < current - 0.01);
   return lower.length > 0 ? Math.max(...lower) : null;
+}
+
+function grindingIn(session: Session, unit: WeightUnit, weight: number): boolean {
+  const relevant = setsAt(session, unit, weight);
+  if (relevant.length === 0) return false;
+  const slow = relevant.filter((set) => set.speed === 1).length;
+  return slow * 2 >= relevant.length;
+}
+
+function effortlessIn(session: Session, unit: WeightUnit, weight: number): boolean {
+  const relevant = setsAt(session, unit, weight);
+  return relevant.length > 0 && relevant.every((set) => set.speed === 3);
 }
 
 export interface GoalInput {
@@ -252,13 +428,15 @@ export interface GoalInput {
   now?: Date;
 }
 
-/** Suggests the next single set to beat.
+/** Suggests what to aim for next.
  *
- *  Double progression at heart: add reps at the current weight until reaching
- *  the rep target, then take the smallest loadable step up and let reps fall
- *  back. Pain and the recorded speed of the last top set can override that —
- *  pain by holding or deloading, a grinding set by refusing to add weight, an
- *  effortless one by allowing the step early. */
+ *  The shape of it: a weight you've established, a rep range whose top is your
+ *  own best at that weight, and an action. Weight only goes up once every set
+ *  reaches the top of the range and the weight has been held for more than one
+ *  session — a single heavier set is treated as a trial to repeat, not as the
+ *  new normal. Pain can hold, shrink or cancel the session, and if pain rose
+ *  after a heavier trial it sends you back down rather than parking you on the
+ *  weight that provoked it. */
 export function calculateGoal({
   exerciseId,
   unit,
@@ -269,126 +447,302 @@ export function calculateGoal({
   const sessions = buildSessions(exerciseId, unit, now);
   if (sessions.length === 0) return null;
 
-  const considered = sessions.slice(0, SESSIONS_CONSIDERED);
-  const current = roundWeight(weightIn(considered[0].top, unit));
-  const lastSpeed: SetSpeed | undefined = considered[0].top.speed;
+  const working = establishedWeight(sessions);
+  const range = repRangeAt(sessions, unit, working);
+  const atWorking = sessionsAtWeight(sessions, unit, working);
+  const probe = findProbe(sessions, unit, working);
+  const pain = readPain(sessions, now);
+  const thresholds = painThresholds(painSensitivity);
 
-  const atCurrent = considered.flatMap((session) =>
-    session.sets.filter((set) => sameWeight(weightIn(set, unit), current))
+  const painWord = (): string => {
+    if (!pain) return "";
+    if (pain.after !== null && pain.resting !== null && pain.rise >= riseLimit) {
+      return `pain is running ${pain.after.toFixed(1)}/${PAIN_MAX} after sessions against ${pain.resting.toFixed(1)} at rest`;
+    }
+    return `pain hit ${pain.now}/${PAIN_MAX} in the last few days`;
+  };
+  const riseLimit = painRiseLimit(painSensitivity);
+  const elevated =
+    pain !== null &&
+    thresholds !== null &&
+    (pain.now >= thresholds.caution || pain.rise >= riseLimit);
+
+  const gaps: number[] = [];
+  for (let i = 1; i < sessions.length; i++) {
+    gaps.push(
+      Math.round(
+        (dateFromKey(sessions[i - 1].date).getTime() -
+          dateFromKey(sessions[i].date).getTime()) /
+          86400000
+      )
+    );
+  }
+  const usualGap = gaps.length > 0 ? median(gaps) : 0;
+  const daysSince = Math.round(
+    (dateFromKey(dateKey(now)).getTime() -
+      dateFromKey(sessions[0].date).getTime()) /
+      86400000
   );
-  const bestReps = atCurrent.reduce((max, set) => Math.max(max, set.reps), 0);
 
-  // A single session is a baseline, not a trend: repeat it and see.
-  if (considered.length === 1 && atCurrent.length < 2) {
+  // --- not training is a valid answer, and comes before anything else
+  if (pain !== null && thresholds !== null && pain.now >= thresholds.stop) {
     return {
-      kind: "baseline",
-      weight: current,
-      reps: bestReps,
+      kind: "rest",
       unit,
-      reason: "First session logged — repeat it to set a baseline.",
+      reason: `${painWord()} — leave this one alone until it settles.`,
     };
   }
 
-  const pain = painAfterSessions(considered, now);
-  const thresholds = painThresholds(painSensitivity);
-  // Quote whichever reading is driving the decision, so the card explains
-  // itself rather than just asserting a level.
-  const painNote = pain
-    ? pain.recent > pain.average
-      ? `Pain hit ${pain.recent}/${PAIN_MAX} in the last few days`
-      : `Pain averaged ${pain.average.toFixed(1)}/${PAIN_MAX} after recent sessions`
-    : "";
-
-  if (pain !== null && thresholds !== null) {
-    if (pain.effective >= thresholds.stop) {
-      const lighter = stepDown(current, availableWeights);
-      return {
-        kind: "deload",
-        weight: lighter ?? current,
-        reps: lighter ? bestReps : Math.max(MIN_REPS_AFTER_STEP, bestReps - 2),
-        unit,
-        reason: `${painNote} — let it settle before training this again, and come back lighter.`,
-      };
-    }
-    if (pain.effective >= thresholds.backOff) {
-      return {
-        kind: "hold",
-        weight: current,
-        reps: bestReps,
-        unit,
-        reason: `${painNote} — repeat this at most, don't push it.`,
-      };
-    }
-    if (pain.effective >= thresholds.caution) {
-      return {
-        kind: "progress-reps",
-        weight: current,
-        reps: bestReps + 1,
-        unit,
-        reason: `${painNote} — one more rep at ${current} ${unit}, no extra weight.`,
-      };
-    }
+  // --- a heavier trial plus rising pain means go back down, not stay up there
+  if (probe && elevated) {
+    return {
+      kind: "regress",
+      weight: working,
+      repsLow: range.low,
+      repsHigh: range.high,
+      unit,
+      reason: `${roundWeight(probe.weight)} ${unit} went on the bar and ${painWord()} — back to ${roundWeight(working)} ${unit} until it's quiet again.`,
+    };
   }
 
-  // Stalled when the best reps at this weight haven't improved across the last
-  // two sessions at it.
-  const atCurrentBySession = considered
-    .filter((session) =>
-      session.sets.some((set) => sameWeight(weightIn(set, unit), current))
-    )
-    .map((session) =>
-      session.sets
-        .filter((set) => sameWeight(weightIn(set, unit), current))
-        .reduce((max, set) => Math.max(max, set.reps), 0)
+  if (pain !== null && thresholds !== null && pain.now >= thresholds.backOff) {
+    // Backing off means taking load off the bar, not doing the same weight for
+    // fewer sets. Only when there's nothing lighter to drop to does the
+    // shorter session become the whole answer.
+    const lighter = working > 0 ? nextWeightDown(working, availableWeights) : null;
+    return {
+      kind: "reduce",
+      weight: lighter ?? working,
+      repsLow: range.low,
+      repsHigh: range.low,
+      sets: 2,
+      unit,
+      reason:
+        lighter !== null
+          ? `${painWord()} — drop to ${roundWeight(lighter)} ${unit} for a couple of easy sets.`
+          : `${painWord()} — keep it short, a couple of easy sets at most.`,
+    };
+  }
+
+  if (elevated) {
+    return {
+      kind: "hold",
+      weight: working,
+      repsLow: range.low,
+      repsHigh: range.high,
+      unit,
+      reason: `${painWord()} — hold ${roundWeight(working)} ${unit} and don't add anything.`,
+    };
+  }
+
+  // --- coming back from a break
+  const layoffLimit = Math.max(LAYOFF_MIN_DAYS, usualGap * LAYOFF_GAP_MULTIPLE);
+  if (daysSince > layoffLimit) {
+    return {
+      kind: "ease-back",
+      weight: working,
+      repsLow: range.low,
+      repsHigh: Math.max(range.low, range.high - 2),
+      unit,
+      reason: `${daysSince} days since the last session — start at the bottom of the range and rebuild.`,
+    };
+  }
+
+  if (sessions.length === 1 && sessions[0].sets.length < 2) {
+    const only = sessions[0].sets[0];
+    return {
+      kind: "baseline",
+      weight: roundWeight(weightIn(only, unit)),
+      repsLow: only.reps,
+      repsHigh: only.reps,
+      unit,
+      reason: "One set logged — repeat it to set a baseline worth measuring.",
+    };
+  }
+
+  // --- a heavier weight that hasn't earned its place yet
+  if (probe) {
+    const probeSets = setsAt(probe.session, unit, probe.weight);
+    const probeBest = probeSets.reduce((max, set) => Math.max(max, set.reps), 0);
+    const probeGround = grindingIn(probe.session, unit, probe.weight);
+    const expected = Math.max(3, carriedReps(working, range.high, probe.weight));
+    const wentWell =
+      !probeGround && probeBest >= Math.max(3, Math.round(expected * 0.6));
+    const probeSessionCount = sessions
+      .slice(0, ESTABLISH_LOOKBACK)
+      .filter((session) => setsAt(session, unit, probe.weight).length > 0).length;
+    // A single set at a heavier weight is a toe in the water; a normal-length
+    // session where every set was heavier is actually moving up.
+    const usualSets = median(
+      atWorking.map((session) => setsAt(session, unit, working).length)
     );
-  const stalled =
-    atCurrentBySession.length >= 2 &&
-    atCurrentBySession[0] <= atCurrentBySession[1];
+    const carriedSession =
+      probeSets.length === probe.session.sets.length &&
+      probeSets.length >= Math.max(2, Math.floor(usualSets));
 
-  const ceiling = repCeilingFor(considered, unit, current);
-  const effortless = lastSpeed === 3;
-  const grinding = lastSpeed === 1;
-  const readyForWeight =
-    !grinding && (effortless || stalled || bestReps >= ceiling);
-
-  if (readyForWeight) {
-    const next = stepUp(current, availableWeights, considered, unit);
-    if (next !== null) {
-      const carried = repsForSameEffort(oneRepMax(current, bestReps), next);
-      const reps = Math.max(
-        MIN_REPS_AFTER_STEP,
-        Math.min(bestReps, carried > 0 ? carried : MIN_REPS_AFTER_STEP)
-      );
-      const reason = effortless
-        ? `Last top set was marked as fast as possible — ${current} ${unit} has more room.`
-        : stalled
-          ? `${bestReps} reps at ${current} ${unit} two sessions running — time to load up.`
-          : `${bestReps} reps clears the ${ceiling}-rep mark at ${current} ${unit}.`;
-      return { kind: "progress-weight", weight: next, reps, unit, reason };
+    if (!wentWell) {
+      return {
+        kind: "regress",
+        weight: working,
+        repsLow: range.low,
+        repsHigh: range.high,
+        unit,
+        reason: probeGround
+          ? `${roundWeight(probe.weight)} ${unit} was a grind — build back up at ${roundWeight(working)} ${unit} first.`
+          : `${roundWeight(probe.weight)} ${unit} only managed ${probeBest} — stay at ${roundWeight(working)} ${unit} a while longer.`,
+      };
     }
+
+    if (probeSessionCount >= 2 || carriedSession) {
+      return {
+        kind: "consolidate",
+        weight: roundWeight(probe.weight),
+        repsLow: Math.max(3, Math.round(expected * 0.75)),
+        repsHigh: Math.max(probeBest, expected),
+        unit,
+        reason:
+          probeSessionCount >= 2
+            ? `${roundWeight(probe.weight)} ${unit} has gone well twice now — hold it for one more session and it's yours.`
+            : `A whole session at ${roundWeight(probe.weight)} ${unit} — repeat it before calling the weight yours.`,
+      };
+    }
+
+    // Tried once and it went fine, but once isn't established, so the goal
+    // stays where it is.
+    return {
+      kind: "build",
+      weight: working,
+      repsLow: range.low,
+      repsHigh: range.high,
+      unit,
+      reason: `${roundWeight(probe.weight)} ${unit} × ${probeBest} went well once — keep ${roundWeight(working)} ${unit} solid and repeat it before it counts.`,
+    };
   }
 
-  const reason = grinding
-    ? `Last top set was a grind — stay at ${current} ${unit} and add a rep.`
-    : readyForWeight
-      ? `Ready to load up, but ${current} ${unit} is the heaviest you have — add reps instead.`
-      : `${bestReps} reps at ${current} ${unit}, aiming for ${ceiling} before adding weight.`;
+  // --- performance at the working weight
+  const trend = repTrend(sessions, unit, working);
+  // Two consecutive non-increases ending clearly below the earlier peak. One
+  // off session is noise, and a session that merely finished lower than it
+  // opened is fatigue, not regression — the trend only ever compares session
+  // bests, so the target snaps back to the opening number next time.
+  const peak = Math.max(...trend.slice(0, -1), 0);
+  const latest = trend[trend.length - 1] ?? 0;
+  const declining =
+    trend.length >= 3 &&
+    latest < trend[trend.length - 2] &&
+    trend[trend.length - 2] <= trend[trend.length - 3] &&
+    latest <= peak - 2;
+  const lastAtWorking = atWorking[0];
+  const lastSets = lastAtWorking ? setsAt(lastAtWorking, unit, working) : [];
+  const worstSet = lastSets.reduce(
+    (min, set) => Math.min(min, set.reps),
+    Number.POSITIVE_INFINITY
+  );
+  const usualSetCount = median(
+    atWorking.map((session) => setsAt(session, unit, working).length)
+  );
+  const fullSession = lastSets.length >= Math.max(1, Math.floor(usualSetCount));
+
+  if (declining) {
+    return {
+      kind: "hold",
+      weight: working,
+      repsLow: range.low,
+      repsHigh: range.high,
+      unit,
+      reason: `Reps have slipped from ${trend[0]} to ${trend[trend.length - 1]} at ${roundWeight(working)} ${unit} — regroup here before pushing on.`,
+    };
+  }
+
+  if (lastAtWorking && grindingIn(lastAtWorking, unit, working)) {
+    return {
+      kind: "hold",
+      weight: working,
+      repsLow: range.low,
+      repsHigh: range.high,
+      unit,
+      reason: `Last session was a grind — stay at ${roundWeight(working)} ${unit} until it feels easier.`,
+    };
+  }
+
+  const bestSet = lastSets.reduce((max, set) => Math.max(max, set.reps), 0);
+  const wholeSessionInRange =
+    fullSession && Number.isFinite(worstSet) && worstSet >= range.low;
+  // The top has to have been held, not just touched once — a single good day
+  // is a personal best, not a reason to load the bar.
+  const heldTop =
+    trend.length >= 2 &&
+    trend[trend.length - 1] >= range.high &&
+    trend[trend.length - 2] >= range.high;
+  const earnedIt =
+    atWorking.length >= SESSIONS_TO_PROGRESS && wholeSessionInRange && heldTop;
+  const cruising =
+    atWorking.length >= 2 &&
+    atWorking
+      .slice(0, 2)
+      .every((session) => effortlessIn(session, unit, working));
+  const readyForMore =
+    earnedIt || (cruising && atWorking.length >= SESSIONS_TO_ESTABLISH);
+
+  if (readyForMore) {
+    // A working weight of zero is a bodyweight movement; there's nothing to
+    // load, so the reps carry the progression.
+    const next =
+      working > 0
+        ? nextWeightUp(working, availableWeights, sessions, unit)
+        : null;
+    if (next !== null) {
+      const carried = Math.max(3, carriedReps(working, range.high, next));
+      const low = Math.max(3, Math.round(carried * 0.75));
+      return {
+        kind: "step-up",
+        weight: next,
+        repsLow: low,
+        repsHigh: Math.max(carried, low + MIN_RANGE_SPAN),
+        unit,
+        reason: cruising
+          ? `Two sessions of ${roundWeight(working)} ${unit} marked as fast as possible — it's ready to go up.`
+          : `Hit ${bestSet} at ${roundWeight(working)} ${unit} with every set inside ${range.low}–${range.high} — the weight has stopped being the limit.`,
+      };
+    }
+    return {
+      kind: "build",
+      weight: working,
+      repsLow: range.high,
+      repsHigh: range.high + 2,
+      unit,
+      reason: `${roundWeight(working)} ${unit} is the heaviest you have — keep taking the reps up instead.`,
+    };
+  }
 
   return {
-    kind: "progress-reps",
-    weight: current,
-    reps: bestReps + 1,
+    kind: "build",
+    weight: working,
+    repsLow: range.low,
+    repsHigh: range.high,
     unit,
-    reason,
+    reason: Number.isFinite(worstSet)
+      ? `Opened at ${bestSet} and finished at ${worstSet} last time — get the whole session inside ${range.low}–${range.high} before the weight moves.`
+      : `Work every set into ${range.low}–${range.high} at ${roundWeight(working)} ${unit}.`,
   };
 }
 
 export function goalLabel(kind: GoalKind): string {
   switch (kind) {
-    case "deload":
+    case "rest":
+      return "Rest";
+    case "regress":
       return "Back off";
+    case "reduce":
+      return "Keep it light";
     case "hold":
       return "Hold";
+    case "consolidate":
+      return "Consolidate";
+    case "step-up":
+      return "Step up";
+    case "ease-back":
+      return "Ease back in";
     case "baseline":
       return "Baseline";
     default:

@@ -192,12 +192,16 @@ export function toPainLevel(value: unknown): number | null {
 	return Math.round(n);
 }
 
-/** "09:12" in local time. */
-export function formatPainTime(entry: PainEntry): string {
-	return new Date(entry.at).toLocaleTimeString(undefined, {
-		hour: "2-digit",
+/** "3:28 PM" in local time, in whatever clock format the device uses. */
+export function formatClockTime(at: number | string): string {
+	return new Date(at).toLocaleTimeString(undefined, {
+		hour: "numeric",
 		minute: "2-digit",
 	});
+}
+
+export function formatPainTime(entry: PainEntry): string {
+	return formatClockTime(entry.at);
 }
 
 const EXERCISES_KEY = "workout:exercises";
@@ -708,7 +712,8 @@ export function highlightSets(sets: WorkoutSet[]): SetHighlights {
 
 /** Plain-text summary of a day's workout, for the clipboard. */
 export function formatDayForClipboard(key: string, unit: WeightUnit): string {
-	const groups = groupByExercise(setsOnDate(key));
+	const sets = setsOnDate(key);
+	const groups = groupByExercise(sets);
 	const pain = painOnDate(key);
 	const lines: string[] = [fullDayLabel(key)];
 	if (groups.length === 0 && pain.length === 0) {
@@ -716,25 +721,50 @@ export function formatDayForClipboard(key: string, unit: WeightUnit): string {
 		return lines.join("\n");
 	}
 	if (groups.length === 0) lines.push("", "No sets recorded.");
+
 	for (const group of groups) {
 		lines.push("", group.name);
 		group.sets.forEach((set, i) => {
 			const speed = set.speed ? ` · ${SPEED_LABELS[set.speed]}` : "";
 			const note = set.note ? ` — ${set.note}` : "";
 			lines.push(
-				`  Set ${i + 1} · ${formatReps(set.reps)} · ${formatSetWeight(set, unit)}${speed}${note}`,
+				`  ${formatClockTime(set.at)} · Set ${i + 1} · ${formatReps(set.reps)} · ${formatSetWeight(set, unit)}${speed}${note}`,
 			);
 		});
 	}
+
 	if (pain.length > 0) {
 		lines.push("", "Pain / irritation");
-		for (const entry of pain) {
-			const note = entry.note ? ` — ${entry.note}` : "";
-			lines.push(
-				`  ${formatPainTime(entry)} · ${entry.level}/${PAIN_MAX}${note}`,
-			);
+		const painLine = (entry: PainEntry) =>
+			`  ${formatPainTime(entry)} · ${entry.level}/${PAIN_MAX}${
+				entry.note ? ` — ${entry.note}` : ""
+			}`;
+
+		// The first and last set bracket the session, so readings either side of
+		// them can be labelled instead of left ambiguous. Without sets there's
+		// nothing to place them against, so they stay a flat list.
+		if (sets.length === 0) {
+			for (const entry of pain) lines.push(painLine(entry));
+		} else {
+			const first = sets.reduce((min, set) => Math.min(min, set.at), Infinity);
+			const last = sets.reduce((max, set) => Math.max(max, set.at), -Infinity);
+			const buckets: { label: string; entries: PainEntry[] }[] = [
+				{ label: "Before Workout", entries: [] },
+				{ label: "During Workout", entries: [] },
+				{ label: "After Workout", entries: [] },
+			];
+			for (const entry of pain) {
+				const at = new Date(entry.at).getTime();
+				buckets[at < first ? 0 : at > last ? 2 : 1].entries.push(entry);
+			}
+			for (const bucket of buckets) {
+				if (bucket.entries.length === 0) continue;
+				lines.push(`  ${bucket.label}`);
+				for (const entry of bucket.entries) lines.push(painLine(entry));
+			}
 		}
 	}
+
 	return lines.join("\n");
 }
 
